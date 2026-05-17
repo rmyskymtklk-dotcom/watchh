@@ -268,8 +268,9 @@ function broadcast(roomId, msg, excludeUserId = null) {
   });
 }
 
-// ─── Start ────────────────────────────────────────────────────────────────────
-const PORT = process.env.PORT || 3000;
-server.listen(PORT, () => {
-  console.log(`\n🎬 WatchParty çalışıyor → http://localhost:${PORT}\n`);
+// Eski hali yerine bunu yapıştır:
+const PORT = process.env.PORT || 10000; 
+
+server.listen(PORT, '0.0.0.0', () => {
+  console.log(`WatchParty yayında! Port: ${PORT}`);
 });
