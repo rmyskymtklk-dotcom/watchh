@@ -1,0 +1,120 @@
+<!DOCTYPE html>
+<html lang="tr">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>WatchParty 🎬</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link href="https://fonts.googleapis.com/css2?family=Syne:wght@400;600;700;800&family=DM+Mono:wght@300;400;500&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="css/style.css" />
+</head>
+<body>
+
+  <!-- ── LOBBY ── -->
+  <div id="lobby">
+    <div class="lobby-bg">
+      <div class="grain"></div>
+      <div class="glow g1"></div>
+      <div class="glow g2"></div>
+    </div>
+
+    <div class="lobby-card">
+      <div class="logo">
+        <span class="logo-icon">◈</span>
+        <span class="logo-text">WatchParty</span>
+      </div>
+      <p class="tagline">Aynı anda, aynı film. Birlikte.</p>
+
+      <div class="nick-row">
+        <input id="nickInput" type="text" placeholder="Takma adın…" maxlength="20" />
+      </div>
+
+      <div class="lobby-actions">
+        <button id="createBtn" class="btn btn-primary">
+          <span>Oda Oluştur</span>
+          <svg viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg>
+        </button>
+
+        <div class="divider"><span>ya da</span></div>
+
+        <div class="join-row">
+          <input id="roomCodeInput" type="text" placeholder="Oda kodu (ör: AB12CD34)" maxlength="8" />
+          <button id="joinBtn" class="btn btn-secondary">Katıl</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ── WATCH ROOM ── -->
+  <div id="room" class="hidden">
+
+    <!-- Topbar -->
+    <header class="topbar">
+      <div class="topbar-left">
+        <span class="logo-sm">◈ WatchParty</span>
+        <div class="room-badge">
+          <span id="roomCodeDisplay">——</span>
+          <button id="copyRoomBtn" title="Kodu kopyala">
+            <svg viewBox="0 0 24 24"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
+          </button>
+        </div>
+      </div>
+      <div class="topbar-center" id="hostControls">
+        <input id="urlInput" type="text" placeholder="Film / dizi linkini yapıştır… (hdfilmcehennemi vb.)" />
+        <button id="loadBtn" class="btn btn-accent">Yükle</button>
+      </div>
+      <div class="topbar-right">
+        <span class="user-pill">
+          <span class="dot"></span>
+          <span id="userCountLabel">1 izleyici</span>
+        </span>
+        <span id="roleLabel" class="role-badge">HOST</span>
+      </div>
+    </header>
+
+    <!-- Main layout -->
+    <div class="main-layout">
+
+      <!-- Video panel -->
+      <div class="video-panel">
+        <div id="placeholder" class="placeholder">
+          <div class="placeholder-inner">
+            <svg viewBox="0 0 80 80" class="ph-icon"><circle cx="40" cy="40" r="38" stroke-width="2"/><polygon points="30,25 58,40 30,55"/></svg>
+            <p>Host bir film linki yükleyince burada görünecek</p>
+          </div>
+        </div>
+        <iframe
+          id="videoFrame"
+          class="hidden"
+          allowfullscreen
+          allow="autoplay; fullscreen; picture-in-picture"
+          sandbox="allow-scripts allow-same-origin allow-forms allow-popups allow-popups-to-escape-sandbox"
+        ></iframe>
+        <div id="frameWarning" class="frame-warning hidden">
+          ⚠️ Bu site iframe'i engelledi.
+          <a id="openExternal" href="#" target="_blank">Yeni sekmede aç →</a>
+          &nbsp;|&nbsp;
+          <span>veya tarayıcıya <strong>"Ignore X-Frame-Options"</strong> eklentisi kur.</span>
+        </div>
+      </div>
+
+      <!-- Sidebar -->
+      <aside class="sidebar">
+        <div class="sidebar-header">
+          <span>Yorumlar</span>
+          <span id="commentCount" class="badge">0</span>
+        </div>
+        <div id="commentList" class="comment-list"></div>
+        <div class="comment-input-area">
+          <input id="commentInput" type="text" placeholder="Bir şeyler yaz…" maxlength="300" />
+          <button id="sendBtn" class="send-btn">
+            <svg viewBox="0 0 24 24"><line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/></svg>
+          </button>
+        </div>
+      </aside>
+    </div>
+  </div>
+
+  <script src="js/app.js"></script>
+</body>
+</html>
