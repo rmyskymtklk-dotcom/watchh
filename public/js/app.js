@@ -305,20 +305,28 @@
     commentList.scrollTop = commentList.scrollHeight;
   }
 
-  // ── Senkronizasyon Yardımcı Fonksiyonları ────────────────────────
+  // ── Senkronizasyon Yardımcı Fonksiyonu ──────────────────────────
   function syncVideoLocal(action, time) {
     toast(`🎥 Host videoyu ${action === 'play' ? 'başlattı' : 'durdurdu'}`);
     
     if (videoFrame.contentWindow) {
       const cmd = action === 'play' ? 'playVideo' : 'pauseVideo';
-      // Iframe'e postMessage gönder (YouTube ve destekleyen Playerlar için)
       videoFrame.contentWindow.postMessage(JSON.stringify({ event: 'command', func: cmd }), '*');
     }
   }
 
-  window.sendSync = function(action) {
+  // Global erişim için sendSync fonksiyonunu dışarıya aktaracak bir tetikleyici ekleyelim
+  window.addEventListener('sendSyncTrigger', (e) => {
     if(!isHost) return;
-    send({ type: 'video_sync', action: action, time: 0 });
-  };
+    send({ type: 'video_sync', action: e.detail.action, time: 0 });
+  });
 
-})();
+})(); // <--- Ana blok bitişi
+
+// ── Global Senkronizasyon Fonksiyonu (Dışarıda) ────────────────────
+window.sendSync = function(action) {
+  console.log("Senkronizasyon butonu tıklandı: " + action);
+  // İçerideki senkronizasyon olayını tetiklemek için CustomEvent kullanıyoruz
+  const syncEvent = new CustomEvent('sendSyncTrigger', { detail: { action: action } });
+  window.dispatchEvent(syncEvent);
+};
