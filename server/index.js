@@ -232,6 +232,22 @@ wss.on('connection', (ws) => {
         break;
       }
 
+      case 'video_sync': {
+        if (!currentRoom) return;
+        const room = rooms[currentRoom];
+        // Saniye bilgisini odaya kaydet (yeni gelenler aynı yerden başlasın)
+        room.currentTime = msg.time;
+        room.lastAction = msg.action;
+
+        // Mesajı gönderen kişi HARİÇ odadaki herkese gönder
+        broadcast(currentRoom, {
+          type: 'video_sync',
+          action: msg.action, // 'play', 'pause', 'seek'
+          time: msg.time
+        }, userId);
+        break;
+      }
+
       case 'ping':
         ws.send(JSON.stringify({ type: 'pong' }));
         break;
@@ -268,7 +284,6 @@ function broadcast(roomId, msg, excludeUserId = null) {
   });
 }
 
-// Eski hali yerine bunu yapıştır:
 const PORT = process.env.PORT || 10000; 
 
 server.listen(PORT, '0.0.0.0', () => {

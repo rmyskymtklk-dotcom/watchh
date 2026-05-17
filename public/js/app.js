@@ -106,13 +106,14 @@
     }
   });
 
-  // ── WebSocket ────────────────────────────────────────────────────
+  // ── WebSocket (Güncellendi: Otomatik Yeniden Bağlanma) ─────────────
   function connectWS(id, nick) {
     const proto = location.protocol === 'https:' ? 'wss' : 'ws';
     ws = new WebSocket(`${proto}://${location.host}`);
 
     ws.addEventListener('open', () => {
       send({ type: 'join', roomId: id, nick });
+      console.log("Bağlantı kuruldu.");
     });
 
     ws.addEventListener('message', e => {
@@ -121,10 +122,12 @@
       handleMsg(msg);
     });
 
+    // SORUN 2 ÇÖZÜMÜ: Bağlantı kapanırsa otomatik tekrar dene
     ws.addEventListener('close', () => {
+      console.warn("Bağlantı koptu, yeniden bağlanılıyor...");
       setTimeout(() => {
         if (roomId) connectWS(roomId, getNick());
-      }, 2000);
+      }, 1500);
     });
 
     // Keepalive
@@ -135,7 +138,7 @@
     if (ws && ws.readyState === 1) ws.send(JSON.stringify(obj));
   }
 
-  // ── Message handler ───────────────────────────────────────────────
+  // ── Message handler (Güncellendi: video_sync eklendi) ──────────────
   function handleMsg(msg) {
     switch (msg.type) {
       case 'joined':
@@ -152,6 +155,10 @@
 
       case 'url_changed':
         loadVideo(msg.url);
+        break;
+
+      case 'video_sync':
+        syncVideoLocal(msg.action, msg.time);
         break;
 
       case 'new_comment':
@@ -183,7 +190,7 @@
     roleLabel.style.color = h ? '#0a0a0d' : 'var(--muted)';
   }
 
-  // ── Load video: önce resolve API'ye sor, embed veya proxy karar ver ──────────
+  // ── Load video ───────────────────────────────────────────────────
   loadBtn.addEventListener('click', () => {
     const raw = urlInput.value.trim();
     if (!raw) { toast('Bir link gir'); return; }
@@ -199,7 +206,6 @@
     frameWarn.classList.add('hidden');
     videoFrame.classList.remove('hidden');
 
-    // Yükleniyor göstergesi
     videoFrame.src = 'about:blank';
     showLoadingOverlay(true);
 
@@ -216,7 +222,6 @@
         toast('▶ Embed olarak yüklendi');
       }
 
-      // Proxy ise yüklenme kontrolü
       if (data.type === 'proxy') {
         videoFrame.onload = () => {
           try {
@@ -224,7 +229,7 @@
             if (!inner || (inner.body && inner.body.innerHTML.trim() === '')) {
               frameWarn.classList.remove('hidden');
             }
-          } catch { /* cross-origin engeli olabilir, sorun yok */ }
+          } catch { }
         };
         videoFrame.onerror = () => frameWarn.classList.remove('hidden');
       }
@@ -235,7 +240,6 @@
     }
   }
 
-  // Yükleniyor overlay'i
   function showLoadingOverlay(show) {
     let ov = document.getElementById('loadingOverlay');
     if (!ov) {
@@ -248,7 +252,6 @@
         gap:1rem;color:#e8ff47;font-family:'Syne',sans-serif;font-size:0.9rem;
         z-index:20;backdrop-filter:blur(4px);
       `;
-      // Spinner style
       const style = document.createElement('style');
       style.textContent = `.spinner{width:36px;height:36px;border:3px solid rgba(232,255,71,0.2);border-top-color:#e8ff47;border-radius:50%;animation:spin 0.8s linear infinite}@keyframes spin{to{transform:rotate(360deg)}}`;
       document.head.appendChild(style);
@@ -259,7 +262,7 @@
     ov.style.display = show ? 'flex' : 'none';
   }
 
-  // ── Comments ──────────────────────────────────────────────────────
+  // ── Comments (Güncellendi: Yorum Donması Engellendi) ──────────────
   sendBtn.addEventListener('click', sendComment);
   commentInput.addEventListener('keydown', e => {
     if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendComment(); }
@@ -273,6 +276,11 @@
   }
 
   function addComment(c) {
+    // SORUN 3 ÇÖZÜMÜ: Eğer 100'den fazla yorum varsa en eskisini sil (Donmayı engeller)
+    if (commentList.children.length > 100) {
+      commentList.removeChild(commentList.firstChild);
+    }
+
     const isOwn = c.userId === myUserId;
     const div = document.createElement('div');
     div.className = 'comment-bubble' + (isOwn ? ' own' : '');
@@ -296,5 +304,21 @@
     commentList.appendChild(div);
     commentList.scrollTop = commentList.scrollHeight;
   }
+
+  // ── Senkronizasyon Yardımcı Fonksiyonları ────────────────────────
+  function syncVideoLocal(action, time) {
+    toast(`🎥 Host videoyu ${action === 'play' ? 'başlattı' : 'durdurdu'}`);
+    
+    if (videoFrame.contentWindow) {
+      const cmd = action === 'play' ? 'playVideo' : 'pauseVideo';
+      // Iframe'e postMessage gönder (YouTube ve destekleyen Playerlar için)
+      videoFrame.contentWindow.postMessage(JSON.stringify({ event: 'command', func: cmd }), '*');
+    }
+  }
+
+  window.sendSync = function(action) {
+    if(!isHost) return;
+    send({ type: 'video_sync', action: action, time: 0 });
+  };
 
 })();

@@ -56,10 +56,15 @@
           </button>
         </div>
       </div>
-      <div class="topbar-center" id="hostControls">
-        <input id="urlInput" type="text" placeholder="Film / dizi linkini yapıştır… (hdfilmcehennemi vb.)" />
+      
+      <div class="topbar-center" id="hostControls" style="display:none; gap:10px;">
+        <input id="urlInput" type="text" placeholder="Film / dizi linkini yapıştır…" />
         <button id="loadBtn" class="btn btn-accent">Yükle</button>
+        
+        <button onclick="sendSync('play')" class="btn btn-secondary" title="Herkesi Başlat">▶</button>
+        <button onclick="sendSync('pause')" class="btn btn-secondary" title="Herkesi Durdur">⏸</button>
       </div>
+
       <div class="topbar-right">
         <span class="user-pill">
           <span class="dot"></span>
@@ -106,7 +111,7 @@
         <div id="commentList" class="comment-list"></div>
         <div class="comment-input-area">
           <input id="commentInput" type="text" placeholder="Bir şeyler yaz…" maxlength="300" />
-          <button id="sendBtn" class="send-btn">
+          <button id="sendBtn" class="btn send-btn">
             <svg viewBox="0 0 24 24"><line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/></svg>
           </button>
         </div>
