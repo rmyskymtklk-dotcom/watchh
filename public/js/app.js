@@ -106,14 +106,17 @@
     }
   });
 
-  // ── WebSocket (Güncellendi: Otomatik Yeniden Bağlanma) ─────────────
+  // ── WebSocket (Kopma ve Görünmezlik Sorunu Çözümü) ─────────────
   function connectWS(id, nick) {
     const proto = location.protocol === 'https:' ? 'wss' : 'ws';
+    // Eski bağlantı varsa temizle
+    if (ws) { ws.close(); }
+    
     ws = new WebSocket(`${proto}://${location.host}`);
 
     ws.addEventListener('open', () => {
       send({ type: 'join', roomId: id, nick });
-      console.log("Bağlantı kuruldu.");
+      console.log("Bağlantı taze lendi ve kuruldu.");
     });
 
     ws.addEventListener('message', e => {
@@ -122,14 +125,27 @@
       handleMsg(msg);
     });
 
+    // BAĞLANTI KOPARSA VEYA MESAJ GİTMEZSE OTOMATİK TAZELER
     ws.addEventListener('close', () => {
-      console.warn("Bağlantı koptu, yeniden bağlanılıyor...");
+      console.warn("Bağlantı zaman aşımına uğradı, 2 saniye içinde canlandırılıyor...");
       setTimeout(() => {
         if (roomId) connectWS(roomId, getNick());
-      }, 1500);
+      }, 2000);
     });
 
-    setInterval(() => { if (ws.readyState === 1) send({ type: 'ping' }); }, 25000);
+    ws.addEventListener('error', (err) => {
+      console.error("Bağlantı hatası:", err);
+      ws.close(); // Hatada kapat ki 'close' tetiklensin ve tekrar bağlansın
+    });
+
+    // Her 20 saniyede bir sunucuya 'ben buradayım' (keepalive) sinyali gönderir
+    // Bu, Render'ın bağlantıyı öldürmesini engeller
+    if (window.wsPingInterval) clearInterval(window.wsPingInterval);
+    window.wsPingInterval = setInterval(() => {
+      if (ws.readyState === WebSocket.OPEN) {
+        send({ type: 'ping' });
+      }
+    }, 20000);
   }
 
   function send(obj) {
@@ -273,7 +289,6 @@
 
   // ── Comments ve Buton Efekti ──────────────────────────────────────
   commentInput.addEventListener('input', () => {
-      // Yazı yazıldığında butona .active sınıfı ekle
       if (commentInput.value.trim().length > 0) {
           sendBtn.classList.add('active');
       } else {
@@ -323,31 +338,25 @@
     commentList.scrollTop = commentList.scrollHeight;
   }
 
-  // ── Senkronizasyon Yardımcı Fonksiyonu (Düzeltildi: Force Click Eklendi) ──
+  // ── Senkronizasyon Yardımcı Fonksiyonu ──────────────────────────
   window.triggerSyncLocal = function(action, time) {
-    const mesaj = action === 'play' ? 'BAŞLATILDI' : 'DURDURLU';
+    const mesaj = action === 'play' ? 'BAŞLATILDI' : 'DURDURULDU';
     toast(`📢 Host komutu: ${mesaj}`);
 
     if (videoFrame) {
       try {
-        // 1. YÖNTEM: YouTube API denemesi
         const cmd = action === 'play' ? 'playVideo' : 'pauseVideo';
         videoFrame.contentWindow.postMessage(JSON.stringify({ event: 'command', func: cmd }), '*');
 
-        // 2. YÖNTEM: "Zorla Tıklama" (Cizgivedizi vb. siteler için)
         const rect = videoFrame.getBoundingClientRect();
-        const x = rect.left + rect.width / 2;
-        const y = rect.top + rect.height / 2;
-        
         const clickEvt = new MouseEvent('click', {
           view: window,
           bubbles: true,
           cancelable: true,
-          clientX: x,
-          clientY: y
+          clientX: rect.left + rect.width / 2,
+          clientY: rect.top + rect.height / 2
         });
         videoFrame.dispatchEvent(clickEvt);
-
       } catch (e) {
         console.log("Otomatik tıklama engellendi.");
       }
@@ -358,21 +367,17 @@
     window.triggerSyncLocal(action, time);
   }
 
-  // Global erişim için sendSync fonksiyonunu dışarıya aktaracak bir tetikleyici
   window.addEventListener('sendSyncTrigger', (e) => {
     if(!isHost) return;
     send({ type: 'video_sync', action: e.detail.action, time: 0 });
   });
 
-})(); // <--- Ana blok bitişi
+})();
 
-// ── Global Senkronizasyon Fonksiyonu (Dışarıda) ────────────────────
 window.sendSync = function(action) {
   console.log("Senkronizasyon butonu tıklandı: " + action);
-  
   const syncEvent = new CustomEvent('sendSyncTrigger', { detail: { action: action } });
   window.dispatchEvent(syncEvent);
-
   if (typeof window.triggerSyncLocal === 'function') {
       window.triggerSyncLocal(action, 0);
   }
