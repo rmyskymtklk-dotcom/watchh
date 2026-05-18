@@ -106,6 +106,10 @@ app.get('/proxy', async (req, res) => {
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), 15000);
 
+    const parsedTarget = new URL(targetUrl);
+    const targetOrigin = parsedTarget.origin;
+    const targetHost   = parsedTarget.hostname;
+
     const response = await fetch(targetUrl, {
       signal: controller.signal,
       headers: {
@@ -113,8 +117,13 @@ app.get('/proxy', async (req, res) => {
         'Accept':                   'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
         'Accept-Language':          'tr-TR,tr;q=0.9,en-US;q=0.8,en;q=0.7',
         'Cache-Control':            'no-cache',
-        'Referer':                  new URL(targetUrl).origin,
+        'Referer':                  targetOrigin + '/',
+        'Origin':                   targetOrigin,
+        'Host':                     targetHost,
         'Upgrade-Insecure-Requests':'1',
+        'Sec-Fetch-Dest':           'document',
+        'Sec-Fetch-Mode':           'navigate',
+        'Sec-Fetch-Site':           'same-origin',
       },
     });
     clearTimeout(timer);
@@ -135,7 +144,7 @@ app.get('/proxy', async (req, res) => {
     }
 
     let body = await response.text();
-    const origin = new URL(targetUrl).origin;
+    const origin = targetOrigin;
 
     if (body.includes('<head>')) {
       body = body.replace('<head>', `<head><base href="${origin}/">`);
@@ -380,13 +389,25 @@ wss.on('connection', (ws) => {
         if (!currentRoom) return;
         const room = rooms[currentRoom];
         if (room.hostId !== userId) return; // sadece host senkronize edebilir
-        room.currentTime = typeof msg.time === 'number' ? msg.time : room.currentTime;
-        room.lastAction  = msg.action || null;
+
+        const newTime   = typeof msg.time === 'number' ? msg.time : room.currentTime;
+        const newAction = msg.action || null;
+
+        // FIX: 'seek' action'ı da lastAction/currentTime günceller.
+        // Ayrıca aynı seek pozisyonunu 1sn içinde tekrar broadcast etme (throttle).
+        const isSameSeek = newAction === 'seek'
+          && room.lastAction === 'seek'
+          && Math.abs(newTime - room.currentTime) < 2;
+        if (isSameSeek) break;
+
+        room.currentTime = newTime;
+        room.lastAction  = newAction;
+
         // Host hariç herkese ilet
         broadcast(currentRoom, {
           type:   'video_sync',
-          action: msg.action,
-          time:   msg.time,
+          action: newAction,
+          time:   newTime,
         }, userId);
         break;
       }

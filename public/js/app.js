@@ -362,7 +362,7 @@
   }
 
   // ── Video sync ────────────────────────────────────────────────────
-  // Host'un iframe eventlerini dinleyip sunucuya iletmesi
+  // Yöntem A: Proxy iframe → host parent'a gönderdiği event'leri sunucuya ilet
   window.addEventListener('message', e => {
     if (!isHost) return;
     let data = e.data;
@@ -371,16 +371,31 @@
     send({ type: 'video_sync', action: data.action, time: data.time || 0 });
   });
 
-  // Host için periyodik durum bildirimi (iframe'e getStatus sor)
+  // Yöntem B: Host'un video konumunu periyodik olarak sunucuya gönder
+  // (proxy'nin iç içe iframe'lerinden event gelmediği durumlarda güvenli fallback)
+  // Her 3 saniyede bir, same-origin iframe'den currentTime oku ve sunucuya bas.
+  let lastBroadcastTime = -1;
   setInterval(() => {
-    if (isHost && ws && ws.readyState === WebSocket.OPEN) {
-      try {
-        videoFrame.contentWindow && videoFrame.contentWindow.postMessage(
-          JSON.stringify({ __watchparty: true, getStatus: true }), '*'
-        );
-      } catch (_) {}
+    if (!isHost || !ws || ws.readyState !== WebSocket.OPEN) return;
+    let currentTime = null;
+    // Önce same-origin video elementini dene
+    try {
+      const doc = videoFrame.contentDocument || videoFrame.contentWindow.document;
+      const vid = doc && doc.querySelector('video');
+      if (vid && !vid.paused && !vid.ended) currentTime = vid.currentTime;
+    } catch (_) {}
+    // Değer değiştiyse sunucuya gönder (sadece oynarken, her seferinde değil)
+    if (currentTime !== null && Math.abs(currentTime - lastBroadcastTime) > 2) {
+      lastBroadcastTime = currentTime;
+      send({ type: 'video_sync', action: 'seek', time: currentTime });
     }
-  }, 5000);
+    // iframe'e getStatus sor (proxy sayfası cevaplarsa Yöntem A devreye girer)
+    try {
+      videoFrame.contentWindow && videoFrame.contentWindow.postMessage(
+        JSON.stringify({ __watchparty: true, getStatus: true }), '*'
+      );
+    } catch (_) {}
+  }, 3000);
 
   function syncVideoLocal(action, time) {
     if (typeof window.triggerSyncLocal === 'function') {
@@ -404,29 +419,35 @@ window.triggerSyncLocal = function (action, time) {
   if (!target) return;
 
   // Yöntem 1: Proxy iframe köprü protokolü
-  target.postMessage(JSON.stringify({ __watchparty: true, action, time: time || 0 }), '*');
+  // 'seek' → önce konuma git, sonra oynat (play gibi davran izleyicide)
+  const proxyAction = action === 'seek' ? 'play' : action;
+  target.postMessage(JSON.stringify({ __watchparty: true, action: proxyAction, time: time || 0 }), '*');
 
   // Yöntem 2: YouTube enablejsapi
-  target.postMessage(JSON.stringify({
-    event: 'command',
-    func:  action === 'play' ? 'playVideo' : 'pauseVideo',
-  }), '*');
-  if (typeof time === 'number' && time > 0) {
-    target.postMessage(JSON.stringify({ event: 'command', func: 'seekTo', args: [time, true] }), '*');
+  if (action === 'seek' || (typeof time === 'number' && time > 0)) {
+    target.postMessage(JSON.stringify({ event: 'command', func: 'seekTo', args: [time || 0, true] }), '*');
+  }
+  if (action !== 'pause') {
+    target.postMessage(JSON.stringify({ event: 'command', func: 'playVideo' }), '*');
+  } else {
+    target.postMessage(JSON.stringify({ event: 'command', func: 'pauseVideo' }), '*');
   }
 
   // Yöntem 3: Vimeo player API
-  target.postMessage(JSON.stringify({ method: action === 'play' ? 'play' : 'pause' }), '*');
+  if (typeof time === 'number' && time > 0) {
+    target.postMessage(JSON.stringify({ method: 'setCurrentTime', value: time }), '*');
+  }
+  target.postMessage(JSON.stringify({ method: action === 'pause' ? 'pause' : 'play' }), '*');
 
   // Yöntem 4: Same-origin direkt erişim
   try {
     const doc = videoFrame.contentDocument || target.document;
     doc.querySelectorAll('video').forEach(v => {
       if (typeof time === 'number' && Math.abs(v.currentTime - time) > 1.5) v.currentTime = time;
-      if (action === 'play') {
-        v.play().catch(() => { v.muted = true; v.play(); });
+      if (action === 'pause') {
+        try { v.pause(); } catch (_) { setTimeout(() => { try { v.pause(); } catch (__) {} }, 50); }
       } else {
-        v.pause();
+        v.play().catch(() => { v.muted = true; v.play(); });
       }
     });
   } catch (_) { /* CORS — beklenen */ }
