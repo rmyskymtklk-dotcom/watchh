@@ -96,10 +96,14 @@
   // ── Enter room ───────────────────────────────────────────────────
   function enterRoom(id, nick) {
     roomId = id;
-    myNick = nick; // nick'i sakla, reconnect'te kullanılacak
+    myNick = nick;
     lobby.classList.add('hidden');
     room.classList.remove('hidden');
     roomCodeDisp.textContent = id;
+    // FIX: "joined" mesajı gelmeden önce rol belirsiz kalmasın.
+    // Herkesi başlangıçta izleyici olarak işaretle; sunucu "joined" ile gerçek
+    // rolü bildirecek. Böylece host kontrolleri yanlışlıkla görünmez.
+    setHost(false);
     connectWS(id, nick);
   }
 
@@ -169,7 +173,11 @@
         break;
 
       case 'url_changed':
-        loadVideo(msg.url);
+        // FIX: Video yüklendikten sonra izleyici kilidini yeniden uygula
+        // (loadVideo içinde videoFrame.classList manipülasyonu lock'u bozabilir)
+        loadVideo(msg.url).then(() => {
+          if (!isHost) setHost(false); // kilit ve rozeti tekrar aktif et
+        });
         break;
 
       case 'video_sync':

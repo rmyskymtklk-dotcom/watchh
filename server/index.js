@@ -38,32 +38,28 @@ function resolveEmbedUrl(rawUrl) {
       }
     }
 
-    // ── Bilibili ─────────────────────────────────────────────────────────────
-    // FIX: bilibili.com/video/BVxxx → player.bilibili.com embed
-    // Eski URL'de dan.bilibili.com kullanılıyordu, bu çalışmıyor.
-    // player.bilibili.com/player.html doğru endpoint'tir.
-    // Ayrıca bilibili.tv (uluslararası) için ayrı dal eklendi.
-    if (host === 'bilibili.com' || host === 'bilibili.tv') {
-      // /video/BVxxxxxx veya /video/avxxxxxx
+    // ── Bilibili.com ──────────────────────────────────────────────────────────
+    // bilibili.com embed player destekliyor → player.bilibili.com/player.html
+    if (host === 'bilibili.com') {
       const match = u.pathname.match(/\/video\/((?:BV|av)[\w]+)/i);
       if (match) {
         const vid   = match[1];
         const isBV  = vid.toUpperCase().startsWith('BV');
         const param = isBV ? `bvid=${vid}` : `aid=${vid.slice(2)}`;
-        // high_quality=1 + danmaku=0 (altyazı kalabalığı kapalı, isteğe bağlı)
         return {
           type: 'embed',
           url:  `https://player.bilibili.com/player.html?${param}&autoplay=1&high_quality=1&danmaku=0&as_wide=1`,
         };
       }
-      // bilibili.tv için farklı yol formatı: /play/ep{id}
-      const epMatch = u.pathname.match(/\/play\/ep(\d+)/i);
-      if (epMatch) {
-        return {
-          type: 'embed',
-          url:  `https://player.bilibili.com/player.html?ep_id=${epMatch[1]}&autoplay=1&high_quality=1`,
-        };
-      }
+    }
+
+    // ── Bilibili.tv ───────────────────────────────────────────────────────────
+    // bilibili.tv (uluslararası site) iframe embed DESTEKLEMİYOR.
+    // Ayrıca coğrafi kısıtlama uyguluyor. Proxy üzerinden yüklenir.
+    // (proxy sayfasında "not available in your area" mesajı görünebilir —
+    //  bu bilibili.tv'nin kendi kısıtlamasıdır, sunucu taraflı çözümü yoktur)
+    if (host === 'bilibili.tv') {
+      return { type: 'proxy', url: rawUrl };
     }
 
     // ── Vimeo ────────────────────────────────────────────────────────────────
