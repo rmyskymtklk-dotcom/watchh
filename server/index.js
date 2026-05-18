@@ -28,7 +28,6 @@ function resolveEmbedUrl(rawUrl) {
       if (!vid && host === 'youtu.be') vid = u.pathname.slice(1).split('?')[0];
       if (!vid && u.pathname.startsWith('/shorts/')) vid = u.pathname.split('/shorts/')[1].split('?')[0];
       if (vid) {
-        // GÜNCELLENEN SATIR: enablejsapi=1 eklendi
         return {
           type: 'embed',
           url: `https://www.youtube-nocookie.com/embed/${vid}?autoplay=1&rel=0&enablejsapi=1`,
@@ -88,7 +87,6 @@ app.get('/proxy', async (req, res) => {
     const ct = response.headers.get('content-type') || 'text/html; charset=utf-8';
     res.setHeader('Content-Type', ct);
 
-    // ✅ Kritik: Engelleyici güvenlik başlıklarını temizle ve esnet
     res.removeHeader('X-Frame-Options');
     res.removeHeader('Content-Security-Policy');
     res.removeHeader('X-Content-Type-Options');
@@ -96,7 +94,6 @@ app.get('/proxy', async (req, res) => {
     res.setHeader('Content-Security-Policy', "frame-ancestors *");
     res.setHeader('Access-Control-Allow-Origin', '*');
 
-    // HTML dışındaki içerikleri (JS, CSS, Resim) doğrudan aktar
     if (!ct.includes('text/html')) {
       response.body.pipe(res);
       return;
@@ -105,16 +102,13 @@ app.get('/proxy', async (req, res) => {
     let body = await response.text();
     const origin = new URL(targetUrl).origin;
 
-    // Sayfa içindeki göreli yolların kırılmaması için <base> ekle
     if (body.includes('<head>')) {
       body = body.replace('<head>', `<head><base href="${origin}/">`);
     } else {
       body = `<base href="${origin}/">` + body;
     }
 
-    // Göreli linkleri mutlak yap
     body = body.replace(/(href|src|action)=["']\/(?!\/)/gi, `$1="${origin}/`);
-    // Meta tag CSP'lerini temizle
     body = body.replace(/<meta[^>]+http-equiv=["']Content-Security-Policy["'][^>]*>/gi, '');
 
     // ── Zorunlu CSS + Video Köprü Script Enjeksiyonu ──
@@ -125,11 +119,9 @@ app.get('/proxy', async (req, res) => {
     </style>
     <script>
     (function() {
-      // Ana pencereden gelen play/pause/seek komutlarını dinle
       window.addEventListener('message', function(e) {
         var data = e.data;
         if (!data) return;
-        // String veya obje olabilir
         if (typeof data === 'string') {
           try { data = JSON.parse(data); } catch(err) { return; }
         }
@@ -138,53 +130,58 @@ app.get('/proxy', async (req, res) => {
         }
       });
 
+      // GÜNCELLENEN AGRESİF handleCmd FONKSİYONU
       function handleCmd(data) {
-        var action = data.action; // 'play', 'pause', 'seek'
+        var action = data.action;
         var time   = data.time;
 
-        // 1) Sayfadaki tüm <video> elementlerini bul
-        var videos = document.querySelectorAll('video');
-        if (videos.length === 0) {
-          // Henüz video yüklenmediyse biraz bekle, tekrar dene
-          setTimeout(function() { handleCmd(data); }, 800);
-          return;
-        }
-        videos.forEach(function(v) {
-          try {
-            if (typeof time === 'number' && !isNaN(time) && time > 0) {
-              v.currentTime = time;
-            }
-            if (action === 'play') {
-              var p = v.play();
-              if (p && p.catch) p.catch(function(){});
-            } else if (action === 'pause') {
-              v.pause();
-            }
-          } catch(err) {}
-        });
+        function tryAction() {
+          var videos = document.querySelectorAll('video');
+          if (videos.length === 0) {
+             // Video henüz DOM'da yoksa veya geç yükleniyorsa 500ms sonra tekrar dene
+             return setTimeout(tryAction, 500);
+          }
+          
+          videos.forEach(function(v) {
+            try {
+              // Zaman senkronizasyonu (1.5 saniyeden fazla sapma varsa)
+              if (typeof time === 'number' && Math.abs(v.currentTime - time) > 1.5) {
+                v.currentTime = time;
+              }
+              
+              if (action === 'play') {
+                var p = v.play();
+                if (p && p.catch) {
+                  p.catch(function() {
+                    // Tarayıcı otomatik oynatmayı engellerse sessize alıp tekrar dene
+                    v.muted = true; 
+                    v.play().catch(function(e){ console.log("Oynatma başarısız:", e); });
+                  });
+                }
+              } else if (action === 'pause') {
+                v.pause();
+              }
+            } catch(err) {}
+          });
 
-        // 2) İç iframe'leri de hedef al (iç içe player'lar için)
-        var innerFrames = document.querySelectorAll('iframe');
-        innerFrames.forEach(function(f) {
-          try {
-            f.contentWindow.postMessage(JSON.stringify({ __watchparty: true, action: action, time: time }), '*');
-          } catch(err) {}
-          // YouTube iç player için
-          var ytCmd = action === 'play' ? 'playVideo' : 'pauseVideo';
-          try { f.contentWindow.postMessage(JSON.stringify({ event: 'command', func: ytCmd }), '*'); } catch(err) {}
-        });
+          // İç iframe'lere (varsa) komutu ilet
+          var innerFrames = document.querySelectorAll('iframe');
+          innerFrames.forEach(function(f) {
+            try {
+              f.contentWindow.postMessage(JSON.stringify({ __watchparty: true, action: action, time: time }), '*');
+              var ytCmd = action === 'play' ? 'playVideo' : 'pauseVideo';
+              f.contentWindow.postMessage(JSON.stringify({ event: 'command', func: ytCmd }), '*');
+            } catch(err) {}
+          });
+        }
+        tryAction();
       }
 
-      // Video olaylarını izle: kullanıcı sayfada bir şey yaparsa host'a bildir
-      document.addEventListener('DOMContentLoaded', function() {
-        observeVideos();
-      });
-      // DOMContentLoaded zaten geçtiyse hemen çalıştır
+      document.addEventListener('DOMContentLoaded', observeVideos);
       if (document.readyState !== 'loading') observeVideos();
 
       function observeVideos() {
         document.querySelectorAll('video').forEach(attachListeners);
-        // Dinamik eklenen video'lar için MutationObserver
         if (window.MutationObserver) {
           var obs = new MutationObserver(function(mutations) {
             mutations.forEach(function(m) {
@@ -205,7 +202,7 @@ app.get('/proxy', async (req, res) => {
         ['play','pause','seeked'].forEach(function(evt) {
           v.addEventListener(evt, function() {
             var now = Date.now();
-            if (now - lastSent < 300) return; // debounce
+            if (now - lastSent < 300) return;
             lastSent = now;
             try {
               window.parent.postMessage(JSON.stringify({
@@ -225,43 +222,26 @@ app.get('/proxy', async (req, res) => {
     } else {
       body = injectedAssets + body;
     }
-    // ── EKLEME SONU ──
 
     res.send(body);
   } catch (err) {
     console.error('Proxy error:', err.message);
     const isTimeout = err.name === 'AbortError';
-    res.status(500).send(`
-      <html><body style="background:#111;color:#ff6b6b;font-family:sans-serif;padding:2rem;text-align:center">
-        <h2 style="margin-bottom:1rem">⚠️ ${isTimeout ? 'Zaman Aşımı' : 'Proxy Hatası'}</h2>
-        <p style="color:#aaa;margin-bottom:0.5rem">${isTimeout ? 'Site 15 saniyede yanıt vermedi.' : 'Bu site proxy üzerinden yüklenemedi.'}</p>
-        <p style="color:#aaa">Hata: <code style="color:#ff6b6b">${err.message}</code></p>
-        <p style="margin-top:1.5rem;color:#6b6b80;font-size:0.85rem">YouTube gibi siteler için embed linki otomatik algılanır.<br>Diğer siteler için tarayıcıya <strong style="color:#e8ff47">Ignore X-Frame-Options</strong> eklentisi kurun.</p>
-      </body></html>
-    `);
+    res.status(500).send(`<html><body style="background:#111;color:#ff6b6b;font-family:sans-serif;padding:2rem;text-align:center"><h2>⚠️ Hata</h2></body></html>`);
   }
 });
 
 // ─── Room API ─────────────────────────────────────────────────────────────────
 app.post('/api/room/create', (req, res) => {
   const roomId = uuidv4().slice(0, 8).toUpperCase();
-  rooms[roomId] = {
-    url: '',
-    comments: [],
-    users: {},
-    hostId: null,
-  };
+  rooms[roomId] = { url: '', comments: [], users: {}, hostId: null };
   res.json({ roomId });
 });
 
 app.get('/api/room/:roomId', (req, res) => {
   const room = rooms[req.params.roomId];
   if (!room) return res.status(404).json({ error: 'Oda bulunamadı' });
-  res.json({
-    url: room.url,
-    comments: room.comments,
-    userCount: Object.keys(room.users).length,
-  });
+  res.json({ url: room.url, comments: room.comments, userCount: Object.keys(room.users).length });
 });
 
 // ─── WebSocket ────────────────────────────────────────────────────────────────
@@ -277,16 +257,12 @@ wss.on('connection', (ws) => {
     switch (msg.type) {
       case 'join': {
         const { roomId, nick } = msg;
-        if (!rooms[roomId]) {
-          ws.send(JSON.stringify({ type: 'error', text: 'Oda bulunamadı' }));
-          return;
-        }
+        if (!rooms[roomId]) return;
         currentRoom = roomId;
         nickname = nick || 'Misafir';
         const room = rooms[roomId];
         room.users[userId] = { ws, nickname };
         if (!room.hostId) room.hostId = userId;
-
         ws.send(JSON.stringify({
           type: 'joined',
           userId,
@@ -296,60 +272,30 @@ wss.on('connection', (ws) => {
           currentTime: room.currentTime || 0,
           lastAction: room.lastAction || null,
         }));
-
-        broadcast(roomId, {
-          type: 'user_joined',
-          nickname,
-          userCount: Object.keys(room.users).length,
-        }, userId);
+        broadcast(roomId, { type: 'user_joined', nickname, userCount: Object.keys(room.users).length }, userId);
         break;
       }
-
       case 'set_url': {
-        if (!currentRoom) return;
-        const room = rooms[currentRoom];
-        if (room.hostId !== userId) return; 
-        room.url = msg.url;
+        if (!currentRoom || rooms[currentRoom].hostId !== userId) return;
+        rooms[currentRoom].url = msg.url;
         broadcast(currentRoom, { type: 'url_changed', url: msg.url });
         break;
       }
-
       case 'comment': {
         if (!currentRoom) return;
-        const room = rooms[currentRoom];
-        const comment = {
-          id: uuidv4().slice(0, 8),
-          userId,
-          nickname,
-          text: msg.text,
-          ts: Date.now(),
-        };
-        room.comments.push(comment);
-        if (room.comments.length > 200) room.comments.shift();
+        const comment = { id: uuidv4().slice(0, 8), userId, nickname, text: msg.text, ts: Date.now() };
+        rooms[currentRoom].comments.push(comment);
         broadcast(currentRoom, { type: 'new_comment', comment });
         break;
       }
-
       case 'video_sync': {
-        if (!currentRoom) return;
-        const room = rooms[currentRoom];
-        // Sadece host senkronizasyon komutu gönderebilir
-        if (room.hostId !== userId) return;
-        room.currentTime = msg.time;
-        room.lastAction = msg.action;
-
-        // Host dahil herkese gönder (host kendi iframe'ini de kontrol etmeli)
-        broadcast(currentRoom, {
-          type: 'video_sync',
-          action: msg.action,
-          time: msg.time
-        });
+        if (!currentRoom || rooms[currentRoom].hostId !== userId) return;
+        rooms[currentRoom].currentTime = msg.time;
+        rooms[currentRoom].lastAction = msg.action;
+        broadcast(currentRoom, { type: 'video_sync', action: msg.action, time: msg.time });
         break;
       }
-
-      case 'ping':
-        ws.send(JSON.stringify({ type: 'pong' }));
-        break;
+      case 'ping': ws.send(JSON.stringify({ type: 'pong' })); break;
     }
   });
 
@@ -357,18 +303,12 @@ wss.on('connection', (ws) => {
     if (!currentRoom || !rooms[currentRoom]) return;
     const room = rooms[currentRoom];
     delete room.users[userId];
-
     const remaining = Object.keys(room.users);
     if (room.hostId === userId && remaining.length > 0) {
       room.hostId = remaining[0];
       room.users[room.hostId].ws.send(JSON.stringify({ type: 'you_are_host' }));
     }
-
-    broadcast(currentRoom, {
-      type: 'user_left',
-      nickname,
-      userCount: remaining.length,
-    });
+    broadcast(currentRoom, { type: 'user_left', nickname, userCount: remaining.length });
   });
 });
 
@@ -377,14 +317,9 @@ function broadcast(roomId, msg, excludeUserId = null) {
   if (!room) return;
   const data = JSON.stringify(msg);
   Object.entries(room.users).forEach(([uid, { ws }]) => {
-    if (uid !== excludeUserId && ws.readyState === WebSocket.OPEN) {
-      ws.send(data);
-    }
+    if (uid !== excludeUserId && ws.readyState === WebSocket.OPEN) ws.send(data);
   });
 }
 
-const PORT = process.env.PORT || 10000; 
-
-server.listen(PORT, '0.0.0.0', () => {
-  console.log(`WatchParty yayında! Port: ${PORT}`);
-});
+const PORT = process.env.PORT || 10000;
+server.listen(PORT, '0.0.0.0', () => { console.log(`WatchParty yayında! Port: ${PORT}`); });

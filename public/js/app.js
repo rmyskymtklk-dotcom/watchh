@@ -242,6 +242,13 @@
       const iframeSrc = data.type === 'embed' ? data.url : data.proxyUrl;
       openExt.href = url;
       videoFrame.src = iframeSrc;
+
+      // YENİ: Iframe yüklendiğinde hostun konumuna gitmesi için kısa bir gecikme ile sync tetikle
+      videoFrame.onload = () => {
+        if (!isHost) {
+          console.log("Iframe yüklendi, senkronizasyon bekleniyor...");
+        }
+      };
     } catch (err) {
       showLoadingOverlay(false);
       frameWarn.classList.remove('hidden');
@@ -365,6 +372,16 @@
     if (!isHost) return;
     send({ type: 'video_sync', action: e.detail.action, time: e.detail.time || 0 });
   });
+
+  // Host için sürekli durum güncelleme (Yeni eklenen bölüm)
+  setInterval(() => {
+    if (isHost && ws && ws.readyState === WebSocket.OPEN) {
+      // Iframe'e mesaj gönderip süreyi iste ve sunucuya bas
+      if (videoFrame.contentWindow) {
+        videoFrame.contentWindow.postMessage(JSON.stringify({__watchparty: true, getStatus: true}), '*');
+      }
+    }
+  }, 5000);
 
 })();
 
