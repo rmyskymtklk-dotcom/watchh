@@ -305,8 +305,9 @@
     commentList.scrollTop = commentList.scrollHeight;
   }
 
-  // ── Senkronizasyon Yardımcı Fonksiyonu (Güncellendi: Bildirim Eklendi) ──
-  function syncVideoLocal(action, time) {
+  // ── Senkronizasyon Yardımcı Fonksiyonu (Düzeltildi) ─────────────
+  // window.sendSync fonksiyonunun erişebilmesi için bu fonksiyonu dışarıya açık hale getirelim
+  window.triggerSyncLocal = function(action, time) {
     // Bu kısım herkese bildirim gönderir
     const mesaj = action === 'play' ? 'HOST VİDEOYU BAŞLATTI! Siz de oynata basın.' : 'HOST VİDEOYU DURDURDU! Siz de durdurun.';
     
@@ -318,9 +319,13 @@
       const cmd = action === 'play' ? 'playVideo' : 'pauseVideo';
       videoFrame.contentWindow.postMessage(JSON.stringify({ event: 'command', func: cmd }), '*');
     }
+  };
+
+  function syncVideoLocal(action, time) {
+    window.triggerSyncLocal(action, time);
   }
 
-  // Global erişim için sendSync fonksiyonunu dışarıya aktaracak bir tetikleyici ekleyelim
+  // Global erişim için sendSync fonksiyonunu dışarıya aktaracak bir tetikleyici
   window.addEventListener('sendSyncTrigger', (e) => {
     if(!isHost) return;
     send({ type: 'video_sync', action: e.detail.action, time: 0 });
@@ -331,7 +336,13 @@
 // ── Global Senkronizasyon Fonksiyonu (Dışarıda) ────────────────────
 window.sendSync = function(action) {
   console.log("Senkronizasyon butonu tıklandı: " + action);
-  // İçerideki senkronizasyon olayını tetiklemek için CustomEvent kullanıyoruz
+  
+  // 1. ADIM: Komutu WebSocket ile diğerlerine gönder
   const syncEvent = new CustomEvent('sendSyncTrigger', { detail: { action: action } });
   window.dispatchEvent(syncEvent);
+
+  // 2. ADIM: Komutu KENDİ ekranında da çalıştır
+  if (typeof window.triggerSyncLocal === 'function') {
+      window.triggerSyncLocal(action, 0);
+  }
 };

@@ -240,12 +240,12 @@ wss.on('connection', (ws) => {
         room.currentTime = msg.time;
         room.lastAction = msg.action;
 
-        // Mesajı gönderen kişi HARİÇ odadaki herkese gönder
+        // GÜNCELLENEN KISIM: Mesaj artık gönderen kişiye de (herkese) gider
         broadcast(currentRoom, {
           type: 'video_sync',
           action: msg.action, // 'play', 'pause', 'seek'
           time: msg.time
-        }, userId);
+        }); 
         break;
       }
 
