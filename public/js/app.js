@@ -122,7 +122,6 @@
       handleMsg(msg);
     });
 
-    // SORUN 2 ÇÖZÜMÜ: Bağlantı kapanırsa otomatik tekrar dene
     ws.addEventListener('close', () => {
       console.warn("Bağlantı koptu, yeniden bağlanılıyor...");
       setTimeout(() => {
@@ -130,7 +129,6 @@
       }, 1500);
     });
 
-    // Keepalive
     setInterval(() => { if (ws.readyState === 1) send({ type: 'ping' }); }, 25000);
   }
 
@@ -181,13 +179,24 @@
     }
   }
 
-  // ── Host ──────────────────────────────────────────────────────────
+  // ── Host ve İzleyici Kilidi ───────────────────────────────────────
   function setHost(h) {
     isHost = h;
     hostControls.style.display = h ? 'flex' : 'none';
     roleLabel.textContent = h ? 'HOST' : 'İZLEYİCİ';
     roleLabel.style.background = h ? 'var(--accent)' : 'var(--surface2)';
     roleLabel.style.color = h ? '#0a0a0d' : 'var(--muted)';
+
+    // İzleyici kilidi: Eğer host değilse videonun üzerine şeffaf katman koy
+    let lock = $('videoLock');
+    if (!lock) {
+        lock = document.createElement('div');
+        lock.id = 'videoLock';
+        // Şeffaf ama tıklamayı engelleyen katman
+        lock.style.cssText = "position:absolute;inset:0;z-index:10;cursor:not-allowed;background:rgba(0,0,0,0);";
+        videoFrame.parentElement.appendChild(lock);
+    }
+    lock.style.display = h ? 'none' : 'block';
   }
 
   // ── Load video ───────────────────────────────────────────────────
@@ -262,7 +271,16 @@
     ov.style.display = show ? 'flex' : 'none';
   }
 
-  // ── Comments (Güncellendi: Yorum Donması Engellendi) ──────────────
+  // ── Comments ve Buton Efekti ──────────────────────────────────────
+  commentInput.addEventListener('input', () => {
+      // Yazı yazıldığında butona .active sınıfı ekle
+      if (commentInput.value.trim().length > 0) {
+          sendBtn.classList.add('active');
+      } else {
+          sendBtn.classList.remove('active');
+      }
+  });
+
   sendBtn.addEventListener('click', sendComment);
   commentInput.addEventListener('keydown', e => {
     if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendComment(); }
@@ -273,10 +291,10 @@
     if (!text) return;
     send({ type: 'comment', text });
     commentInput.value = '';
+    sendBtn.classList.remove('active');
   }
 
   function addComment(c) {
-    // SORUN 3 ÇÖZÜMÜ: Eğer 100'den fazla yorum varsa en eskisini sil (Donmayı engeller)
     if (commentList.children.length > 100) {
       commentList.removeChild(commentList.firstChild);
     }
@@ -305,19 +323,34 @@
     commentList.scrollTop = commentList.scrollHeight;
   }
 
-  // ── Senkronizasyon Yardımcı Fonksiyonu (Düzeltildi) ─────────────
-  // window.sendSync fonksiyonunun erişebilmesi için bu fonksiyonu dışarıya açık hale getirelim
+  // ── Senkronizasyon Yardımcı Fonksiyonu (Düzeltildi: Force Click Eklendi) ──
   window.triggerSyncLocal = function(action, time) {
-    // Bu kısım herkese bildirim gönderir
-    const mesaj = action === 'play' ? 'HOST VİDEOYU BAŞLATTI! Siz de oynata basın.' : 'HOST VİDEOYU DURDURDU! Siz de durdurun.';
-    
-    // Ekranda turuncu/sarı bir bildirim çıkarır
-    toast(`📢 ${mesaj}`);
+    const mesaj = action === 'play' ? 'BAŞLATILDI' : 'DURDURLU';
+    toast(`📢 Host komutu: ${mesaj}`);
 
-    // Eğer video kontrol edilebilirse dene (YouTube vb. için)
-    if (videoFrame.contentWindow) {
-      const cmd = action === 'play' ? 'playVideo' : 'pauseVideo';
-      videoFrame.contentWindow.postMessage(JSON.stringify({ event: 'command', func: cmd }), '*');
+    if (videoFrame) {
+      try {
+        // 1. YÖNTEM: YouTube API denemesi
+        const cmd = action === 'play' ? 'playVideo' : 'pauseVideo';
+        videoFrame.contentWindow.postMessage(JSON.stringify({ event: 'command', func: cmd }), '*');
+
+        // 2. YÖNTEM: "Zorla Tıklama" (Cizgivedizi vb. siteler için)
+        const rect = videoFrame.getBoundingClientRect();
+        const x = rect.left + rect.width / 2;
+        const y = rect.top + rect.height / 2;
+        
+        const clickEvt = new MouseEvent('click', {
+          view: window,
+          bubbles: true,
+          cancelable: true,
+          clientX: x,
+          clientY: y
+        });
+        videoFrame.dispatchEvent(clickEvt);
+
+      } catch (e) {
+        console.log("Otomatik tıklama engellendi.");
+      }
     }
   };
 
@@ -337,11 +370,9 @@
 window.sendSync = function(action) {
   console.log("Senkronizasyon butonu tıklandı: " + action);
   
-  // 1. ADIM: Komutu WebSocket ile diğerlerine gönder
   const syncEvent = new CustomEvent('sendSyncTrigger', { detail: { action: action } });
   window.dispatchEvent(syncEvent);
 
-  // 2. ADIM: Komutu KENDİ ekranında da çalıştır
   if (typeof window.triggerSyncLocal === 'function') {
       window.triggerSyncLocal(action, 0);
   }
