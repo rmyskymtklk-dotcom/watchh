@@ -305,10 +305,15 @@
     commentList.scrollTop = commentList.scrollHeight;
   }
 
-  // ── Senkronizasyon Yardımcı Fonksiyonu ──────────────────────────
+  // ── Senkronizasyon Yardımcı Fonksiyonu (Güncellendi: Bildirim Eklendi) ──
   function syncVideoLocal(action, time) {
-    toast(`🎥 Host videoyu ${action === 'play' ? 'başlattı' : 'durdurdu'}`);
+    // Bu kısım herkese bildirim gönderir
+    const mesaj = action === 'play' ? 'HOST VİDEOYU BAŞLATTI! Siz de oynata basın.' : 'HOST VİDEOYU DURDURDU! Siz de durdurun.';
     
+    // Ekranda turuncu/sarı bir bildirim çıkarır
+    toast(`📢 ${mesaj}`);
+
+    // Eğer video kontrol edilebilirse dene (YouTube vb. için)
     if (videoFrame.contentWindow) {
       const cmd = action === 'play' ? 'playVideo' : 'pauseVideo';
       videoFrame.contentWindow.postMessage(JSON.stringify({ event: 'command', func: cmd }), '*');

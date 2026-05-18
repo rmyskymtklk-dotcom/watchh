@@ -28,9 +28,10 @@ function resolveEmbedUrl(rawUrl) {
       if (!vid && host === 'youtu.be') vid = u.pathname.slice(1).split('?')[0];
       if (!vid && u.pathname.startsWith('/shorts/')) vid = u.pathname.split('/shorts/')[1].split('?')[0];
       if (vid) {
+        // GÜNCELLENEN SATIR: enablejsapi=1 eklendi
         return {
           type: 'embed',
-          url: `https://www.youtube-nocookie.com/embed/${vid}?autoplay=1&rel=0`,
+          url: `https://www.youtube-nocookie.com/embed/${vid}?autoplay=1&rel=0&enablejsapi=1`,
         };
       }
     }
