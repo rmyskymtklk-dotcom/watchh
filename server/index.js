@@ -17,12 +17,13 @@ app.use(express.static(path.join(__dirname, '../public')));
 // ─── In-memory store ──────────────────────────────────────────────────────────
 const rooms = {};
 
-// ─── URL Dönüştürücü: YouTube/Vimeo/Dailymotion → embed ─────────────────────
+// ─── URL Dönüştürücü: YouTube/Vimeo/Dailymotion/Bilibili → embed ──────────────
 function resolveEmbedUrl(rawUrl) {
   try {
     const u = new URL(rawUrl.startsWith('http') ? rawUrl : 'https://' + rawUrl);
     const host = u.hostname.replace('www.', '');
 
+    // YouTube Desteği
     if (host === 'youtube.com' || host === 'youtu.be') {
       let vid = u.searchParams.get('v');
       if (!vid && host === 'youtu.be') vid = u.pathname.slice(1).split('?')[0];
@@ -35,6 +36,18 @@ function resolveEmbedUrl(rawUrl) {
       }
     }
 
+    // Bilibili Desteği (Yeni Eklenen Bölüm)
+    if (host === 'bilibili.tv') {
+      const vid = u.pathname.split('/').pop();
+      if (vid) {
+        return { 
+          type: 'embed', 
+          url: `https://www.bilibili.tv/en/space/video/embed/${vid}` 
+        };
+      }
+    }
+
+    // Vimeo Desteği
     if (host === 'vimeo.com') {
       const vid = u.pathname.split('/').filter(Boolean)[0];
       if (vid && /^\d+$/.test(vid)) {
@@ -42,6 +55,7 @@ function resolveEmbedUrl(rawUrl) {
       }
     }
 
+    // Dailymotion Desteği
     if (host === 'dailymotion.com') {
       const vid = u.pathname.split('/video/')[1];
       if (vid) return { type: 'embed', url: `https://www.dailymotion.com/embed/video/${vid}?autoplay=1` };
@@ -111,7 +125,6 @@ app.get('/proxy', async (req, res) => {
     body = body.replace(/(href|src|action)=["']\/(?!\/)/gi, `$1="${origin}/`);
     body = body.replace(/<meta[^>]+http-equiv=["']Content-Security-Policy["'][^>]*>/gi, '');
 
-    // ── Zorunlu CSS + Video Köprü Script Enjeksiyonu ──
     const injectedAssets = `
     <style>
         html, body { margin: 0 !important; padding: 0 !important; width: 100% !important; height: 100% !important; overflow: auto !important; }
@@ -130,7 +143,6 @@ app.get('/proxy', async (req, res) => {
         }
       });
 
-      // GÜNCELLENEN AGRESİF handleCmd FONKSİYONU
       function handleCmd(data) {
         var action = data.action;
         var time   = data.time;
@@ -138,13 +150,11 @@ app.get('/proxy', async (req, res) => {
         function tryAction() {
           var videos = document.querySelectorAll('video');
           if (videos.length === 0) {
-             // Video henüz DOM'da yoksa veya geç yükleniyorsa 500ms sonra tekrar dene
              return setTimeout(tryAction, 500);
           }
           
           videos.forEach(function(v) {
             try {
-              // Zaman senkronizasyonu (1.5 saniyeden fazla sapma varsa)
               if (typeof time === 'number' && Math.abs(v.currentTime - time) > 1.5) {
                 v.currentTime = time;
               }
@@ -153,7 +163,6 @@ app.get('/proxy', async (req, res) => {
                 var p = v.play();
                 if (p && p.catch) {
                   p.catch(function() {
-                    // Tarayıcı otomatik oynatmayı engellerse sessize alıp tekrar dene
                     v.muted = true; 
                     v.play().catch(function(e){ console.log("Oynatma başarısız:", e); });
                   });
@@ -164,7 +173,6 @@ app.get('/proxy', async (req, res) => {
             } catch(err) {}
           });
 
-          // İç iframe'lere (varsa) komutu ilet
           var innerFrames = document.querySelectorAll('iframe');
           innerFrames.forEach(function(f) {
             try {
@@ -227,7 +235,7 @@ app.get('/proxy', async (req, res) => {
   } catch (err) {
     console.error('Proxy error:', err.message);
     const isTimeout = err.name === 'AbortError';
-    res.status(500).send(`<html><body style="background:#111;color:#ff6b6b;font-family:sans-serif;padding:2rem;text-align:center"><h2>⚠️ Hata</h2></body></html>`);
+    res.status(500).send(\`<html><body style="background:#111;color:#ff6b6b;font-family:sans-serif;padding:2rem;text-align:center"><h2>⚠️ Hata</h2></body></html>\`);
   }
 });
 
