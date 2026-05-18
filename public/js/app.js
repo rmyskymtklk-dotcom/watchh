@@ -154,7 +154,16 @@
       case 'joined':
         myUserId = msg.userId;
         setHost(msg.isHost);
-        if (msg.url) loadVideo(msg.url);
+        if (msg.url) {
+          loadVideo(msg.url).then(() => {
+            // Video yüklendikten sonra mevcut konuma sync et
+            if (!msg.isHost && msg.lastAction && msg.currentTime > 0) {
+              setTimeout(() => {
+                window.triggerSyncLocal(msg.lastAction, msg.currentTime);
+              }, 2500); // iframe'in yüklenmesi için bekle
+            }
+          });
+        }
         if (msg.comments) msg.comments.forEach(addComment);
         break;
 
@@ -219,7 +228,7 @@
   });
 
   async function loadVideo(url) {
-    if (!url) return;
+    if (!url) return Promise.resolve();
     placeholder.classList.add('hidden');
     frameWarn.classList.add('hidden');
     videoFrame.classList.remove('hidden');
@@ -297,53 +306,64 @@
     commentList.scrollTop = commentList.scrollHeight;
   }
 
-  // ── Senkronizasyon Yardımcı Fonksiyonu (GÜNCELLENDİ: Yazılım Odaklı Çözümler) ──
+  // ── Senkronizasyon Yardımcı Fonksiyonu ──────────────────────────
   window.triggerSyncLocal = function(action, time) {
-    const mesaj = action === 'play' ? 'BAŞLATILDI' : 'DURDURULDU';
+    const mesaj = action === 'play' ? 'BAŞLATILDI' : action === 'pause' ? 'DURDURULDU' : 'ATLANDI';
     toast(`📢 Host komutu: ${mesaj}`);
 
-    if (videoFrame) {
-        // Yazılım Çözümü 1: Standart HTML5 Video tetikleme
-        try {
-            const innerDoc = videoFrame.contentDocument || videoFrame.contentWindow.document;
-            const videoEl = innerDoc.querySelector('video');
-            if (videoEl) {
-                action === 'play' ? videoEl.play() : videoEl.pause();
-                return; 
-            }
-        } catch (e) {
-            // CORS engeli varsa Çözüm 2'ye geçilir
-        }
+    if (!videoFrame || videoFrame.classList.contains('hidden')) return;
 
-        // Yazılım Çözümü 2: PostMessage Dağıtımı (YouTube, Vimeo ve Genel Playerlar)
-        const cmd = action === 'play' ? 'playVideo' : 'pauseVideo';
-        const rawCmd = action === 'play' ? 'play' : 'pause';
-        
-        const target = videoFrame.contentWindow;
-        target.postMessage(JSON.stringify({ event: 'command', func: cmd }), '*');
-        target.postMessage(JSON.stringify({ method: rawCmd }), '*');
-        target.postMessage('{"event":"command","func":"' + cmd + '"}', '*');
+    const target = videoFrame.contentWindow;
+    if (!target) return;
 
-        // Yazılım Çözümü 3: Sanal Mouse Olayı (Zorlayıcı tıklama)
-        const rect = videoFrame.getBoundingClientRect();
-        const click = new MouseEvent('click', {
-            bubbles: true,
-            cancelable: true,
-            view: window,
-            clientX: rect.width / 2,
-            clientY: rect.height / 2
-        });
-        videoFrame.dispatchEvent(click);
+    // Yöntem 1: Proxy iframe'e köprü protokolü (ana çözüm)
+    const wpMsg = JSON.stringify({ __watchparty: true, action, time: time || 0 });
+    target.postMessage(wpMsg, '*');
+
+    // Yöntem 2: YouTube embed API (enablejsapi=1 ile yüklendi)
+    const ytCmd = action === 'play' ? 'playVideo' : 'pauseVideo';
+    target.postMessage(JSON.stringify({ event: 'command', func: ytCmd }), '*');
+    if (typeof time === 'number' && time > 0) {
+      target.postMessage(JSON.stringify({ event: 'command', func: 'seekTo', args: [time, true] }), '*');
     }
+
+    // Yöntem 3: Vimeo player API
+    const vimeoCmd = action === 'play' ? 'play' : 'pause';
+    target.postMessage(JSON.stringify({ method: vimeoCmd }), '*');
+
+    // Yöntem 4: Same-origin fallback (proxy sayfasında direkt erişim)
+    try {
+      const innerDoc = videoFrame.contentDocument || target.document;
+      const videos = innerDoc.querySelectorAll('video');
+      videos.forEach(v => {
+        try {
+          if (typeof time === 'number' && time > 0) v.currentTime = time;
+          action === 'play' ? v.play().catch(() => {}) : v.pause();
+        } catch(e) {}
+      });
+    } catch (e) { /* CORS engeli — beklenen durum */ }
   };
+
+  // iframe'den gelen video olaylarını host olarak yakala ve yayınla
+  window.addEventListener('message', (e) => {
+    if (!isHost) return;
+    let data = e.data;
+    if (!data) return;
+    if (typeof data === 'string') {
+      try { data = JSON.parse(data); } catch { return; }
+    }
+    if (data.__watchparty_event) {
+      send({ type: 'video_sync', action: data.action, time: data.time || 0 });
+    }
+  });
 
   function syncVideoLocal(action, time) {
     window.triggerSyncLocal(action, time);
   }
 
   window.addEventListener('sendSyncTrigger', (e) => {
-    if(!isHost) return;
-    send({ type: 'video_sync', action: e.detail.action, time: 0 });
+    if (!isHost) return;
+    send({ type: 'video_sync', action: e.detail.action, time: e.detail.time || 0 });
   });
 
 })();

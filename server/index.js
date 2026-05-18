@@ -117,18 +117,113 @@ app.get('/proxy', async (req, res) => {
     // Meta tag CSP'lerini temizle
     body = body.replace(/<meta[^>]+http-equiv=["']Content-Security-Policy["'][^>]*>/gi, '');
 
-    // ── EKLEME: Zorunlu CSS Enjeksiyonu ──
-    const forceFullScreenCSS = `
+    // ── Zorunlu CSS + Video Köprü Script Enjeksiyonu ──
+    const injectedAssets = `
     <style>
         html, body { margin: 0 !important; padding: 0 !important; width: 100% !important; height: 100% !important; overflow: auto !important; }
         iframe, video { max-width: 100% !important; }
     </style>
-    `;
+    <script>
+    (function() {
+      // Ana pencereden gelen play/pause/seek komutlarını dinle
+      window.addEventListener('message', function(e) {
+        var data = e.data;
+        if (!data) return;
+        // String veya obje olabilir
+        if (typeof data === 'string') {
+          try { data = JSON.parse(data); } catch(err) { return; }
+        }
+        if (data.__watchparty) {
+          handleCmd(data);
+        }
+      });
+
+      function handleCmd(data) {
+        var action = data.action; // 'play', 'pause', 'seek'
+        var time   = data.time;
+
+        // 1) Sayfadaki tüm <video> elementlerini bul
+        var videos = document.querySelectorAll('video');
+        if (videos.length === 0) {
+          // Henüz video yüklenmediyse biraz bekle, tekrar dene
+          setTimeout(function() { handleCmd(data); }, 800);
+          return;
+        }
+        videos.forEach(function(v) {
+          try {
+            if (typeof time === 'number' && !isNaN(time) && time > 0) {
+              v.currentTime = time;
+            }
+            if (action === 'play') {
+              var p = v.play();
+              if (p && p.catch) p.catch(function(){});
+            } else if (action === 'pause') {
+              v.pause();
+            }
+          } catch(err) {}
+        });
+
+        // 2) İç iframe'leri de hedef al (iç içe player'lar için)
+        var innerFrames = document.querySelectorAll('iframe');
+        innerFrames.forEach(function(f) {
+          try {
+            f.contentWindow.postMessage(JSON.stringify({ __watchparty: true, action: action, time: time }), '*');
+          } catch(err) {}
+          // YouTube iç player için
+          var ytCmd = action === 'play' ? 'playVideo' : 'pauseVideo';
+          try { f.contentWindow.postMessage(JSON.stringify({ event: 'command', func: ytCmd }), '*'); } catch(err) {}
+        });
+      }
+
+      // Video olaylarını izle: kullanıcı sayfada bir şey yaparsa host'a bildir
+      document.addEventListener('DOMContentLoaded', function() {
+        observeVideos();
+      });
+      // DOMContentLoaded zaten geçtiyse hemen çalıştır
+      if (document.readyState !== 'loading') observeVideos();
+
+      function observeVideos() {
+        document.querySelectorAll('video').forEach(attachListeners);
+        // Dinamik eklenen video'lar için MutationObserver
+        if (window.MutationObserver) {
+          var obs = new MutationObserver(function(mutations) {
+            mutations.forEach(function(m) {
+              m.addedNodes.forEach(function(node) {
+                if (node.nodeName === 'VIDEO') attachListeners(node);
+                if (node.querySelectorAll) node.querySelectorAll('video').forEach(attachListeners);
+              });
+            });
+          });
+          obs.observe(document.body || document.documentElement, { childList: true, subtree: true });
+        }
+      }
+
+      var lastSent = 0;
+      function attachListeners(v) {
+        if (v.__wpAttached) return;
+        v.__wpAttached = true;
+        ['play','pause','seeked'].forEach(function(evt) {
+          v.addEventListener(evt, function() {
+            var now = Date.now();
+            if (now - lastSent < 300) return; // debounce
+            lastSent = now;
+            try {
+              window.parent.postMessage(JSON.stringify({
+                __watchparty_event: true,
+                action: evt === 'play' ? 'play' : (evt === 'pause' ? 'pause' : 'seek'),
+                time: v.currentTime
+              }), '*');
+            } catch(err) {}
+          });
+        });
+      }
+    })();
+    </script>`;
 
     if (body.includes('</head>')) {
-      body = body.replace('</head>', forceFullScreenCSS + '</head>');
+      body = body.replace('</head>', injectedAssets + '</head>');
     } else {
-      body = forceFullScreenCSS + body;
+      body = injectedAssets + body;
     }
     // ── EKLEME SONU ──
 
@@ -198,6 +293,8 @@ wss.on('connection', (ws) => {
           isHost: room.hostId === userId,
           url: room.url,
           comments: room.comments,
+          currentTime: room.currentTime || 0,
+          lastAction: room.lastAction || null,
         }));
 
         broadcast(roomId, {
@@ -236,16 +333,17 @@ wss.on('connection', (ws) => {
       case 'video_sync': {
         if (!currentRoom) return;
         const room = rooms[currentRoom];
-        // Saniye bilgisini odaya kaydet (yeni gelenler aynı yerden başlasın)
+        // Sadece host senkronizasyon komutu gönderebilir
+        if (room.hostId !== userId) return;
         room.currentTime = msg.time;
         room.lastAction = msg.action;
 
-        // GÜNCELLENEN KISIM: Mesaj artık gönderen kişiye de (herkese) gider
+        // Host dahil herkese gönder (host kendi iframe'ini de kontrol etmeli)
         broadcast(currentRoom, {
           type: 'video_sync',
-          action: msg.action, // 'play', 'pause', 'seek'
+          action: msg.action,
           time: msg.time
-        }); 
+        });
         break;
       }
 
