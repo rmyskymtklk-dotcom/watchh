@@ -1,14 +1,14 @@
 /* ─── Variables ─────────────────────────────────────────────────── */
 :root {
-  --bg:         #0a0a0d;
-  --surface:    #111118;
-  --surface2:   #18181f;
-  --border:     rgba(255,255,255,0.07);
-  --accent:     #e8ff47;
-  --accent2:    #ff6b6b;
-  --text:       #f0f0f5;
-  --muted:      #6b6b80;
-  --radius:     12px;
+  --bg:          #0a0a0d;
+  --surface:     #111118;
+  --surface2:    #18181f;
+  --border:      rgba(255,255,255,0.07);
+  --accent:      #e8ff47;
+  --accent2:     #ff6b6b;
+  --text:        #f0f0f5;
+  --muted:       #6b6b80;
+  --radius:      12px;
   --font-head: 'Syne', sans-serif;
   --font-mono: 'DM Mono', monospace;
 }
@@ -222,8 +222,17 @@ input[type="text"]::placeholder { color: var(--muted); }
   align-items: center;
   justify-content: center;
   overflow: hidden;
-  width: 100%; /* Eklenen */
-  height: 100%; /* Eklenen */
+  width: 100%;
+  height: 100%;
+}
+
+/* İzleyici Kilidi (Şeffaf ama videoyu engellemez) */
+#videoLock {
+    position: absolute;
+    inset: 0;
+    z-index: 999;
+    background: rgba(0,0,0,0); /* Tamamen şeffaf */
+    cursor: default;
 }
 
 .placeholder {
@@ -244,10 +253,9 @@ input[type="text"]::placeholder { color: var(--muted); }
     width: 100%;
     height: 100%;
     border: none;
-    display: block; /* Boşlukları engeller */
+    display: block; 
 }
 
-/* İframe gizli değilse tüm alanı kaplamalı */
 #videoFrame:not(.hidden) {
     display: block;
 }
@@ -329,7 +337,7 @@ input[type="text"]::placeholder { color: var(--muted); }
   padding: 0.2rem 0;
 }
 
-/* Comment input */
+/* Comment input area & Send Button Effect */
 .comment-input-area {
   display: flex;
   gap: 0.5rem;
@@ -337,6 +345,7 @@ input[type="text"]::placeholder { color: var(--muted); }
   border-top: 1px solid var(--border);
 }
 .comment-input-area input { flex: 1; font-size: 0.84rem; }
+
 .send-btn {
   background: var(--accent); border: none; border-radius: var(--radius);
   width: 40px; height: 40px; cursor: pointer; flex-shrink: 0;
@@ -345,6 +354,16 @@ input[type="text"]::placeholder { color: var(--muted); }
 }
 .send-btn:hover { transform: scale(1.06); box-shadow: 0 4px 16px rgba(232,255,71,0.35); }
 .send-btn svg { width: 16px; height: 16px; stroke: #0a0a0d; stroke-width: 2.5; fill: none; stroke-linecap: round; stroke-linejoin: round; }
+
+/* Gönder Butonu Aktiflik Durumu */
+.send-btn .btn-icon { display: none; }
+.send-btn.active .btn-text { display: none; }
+.send-btn.active .btn-icon { 
+    display: inline-block; 
+    font-size: 1.2rem; 
+    color: #0a0a0d; 
+    font-weight: bold;
+}
 
 /* Toast */
 .toast {
