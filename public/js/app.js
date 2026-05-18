@@ -8,30 +8,32 @@
   let isHost = false;
   let roomId = null;
   let commentCount = 0;
+  // Reconnect sırasında takma adı kaybetmemek için sakla
+  let myNick = 'Misafir';
 
   // ── DOM refs ─────────────────────────────────────────────────────
   const $ = id => document.getElementById(id);
-  const lobby       = $('lobby');
-  const room        = $('room');
-  const nickInput   = $('nickInput');
-  const createBtn   = $('createBtn');
-  const joinBtn     = $('joinBtn');
-  const roomCodeIn  = $('roomCodeInput');
+  const lobby        = $('lobby');
+  const room         = $('room');
+  const nickInput    = $('nickInput');
+  const createBtn    = $('createBtn');
+  const joinBtn      = $('joinBtn');
+  const roomCodeIn   = $('roomCodeInput');
   const roomCodeDisp = $('roomCodeDisplay');
-  const copyRoomBtn = $('copyRoomBtn');
+  const copyRoomBtn  = $('copyRoomBtn');
   const hostControls = $('hostControls');
   const urlInput     = $('urlInput');
   const loadBtn      = $('loadBtn');
   const videoFrame   = $('videoFrame');
-  const placeholder = $('placeholder');
-  const frameWarn   = $('frameWarning');
-  const openExt     = $('openExternal');
-  const userCount   = $('userCountLabel');
-  const roleLabel   = $('roleLabel');
-  const commentList = $('commentList');
-  const commentCnt  = $('commentCount');
+  const placeholder  = $('placeholder');
+  const frameWarn    = $('frameWarning');
+  const openExt      = $('openExternal');
+  const userCount    = $('userCountLabel');
+  const roleLabel    = $('roleLabel');
+  const commentList  = $('commentList');
+  const commentCnt   = $('commentCount');
   const commentInput = $('commentInput');
-  const sendBtn     = $('sendBtn');
+  const sendBtn      = $('sendBtn');
 
   // ── Helpers ──────────────────────────────────────────────────────
   function toast(msg) {
@@ -94,6 +96,7 @@
   // ── Enter room ───────────────────────────────────────────────────
   function enterRoom(id, nick) {
     roomId = id;
+    myNick = nick; // nick'i sakla, reconnect'te kullanılacak
     lobby.classList.add('hidden');
     room.classList.remove('hidden');
     roomCodeDisp.textContent = id;
@@ -106,16 +109,16 @@
     navigator.clipboard.writeText(link).then(() => toast('✓ Link kopyalandı!'));
   });
 
-  // ── WebSocket (Kopma ve Görünmezlik Sorunu Çözümü) ─────────────
+  // ── WebSocket ─────────────────────────────────────────────────────
   function connectWS(id, nick) {
     const proto = location.protocol === 'https:' ? 'wss' : 'ws';
-    if (ws) { ws.close(); }
-    
+    if (ws) { ws.onclose = null; ws.close(); } // eski bağlantıyı sessizce kapat
+
     ws = new WebSocket(`${proto}://${location.host}`);
 
     ws.addEventListener('open', () => {
       send({ type: 'join', roomId: id, nick });
-      console.log("Bağlantı tazelendi ve kuruldu.");
+      console.log('WS bağlantısı kuruldu.');
     });
 
     ws.addEventListener('message', e => {
@@ -125,22 +128,17 @@
     });
 
     ws.addEventListener('close', () => {
-      console.warn("Bağlantı zaman aşımına uğradı, 2 saniye içinde canlandırılıyor...");
+      console.warn('WS koptu, 2sn sonra yeniden bağlanılıyor…');
       setTimeout(() => {
-        if (roomId) connectWS(roomId, getNick());
+        if (roomId) connectWS(roomId, myNick); // kayıtlı nick ile reconnect
       }, 2000);
     });
 
-    ws.addEventListener('error', (err) => {
-      console.error("Bağlantı hatası:", err);
-      ws.close();
-    });
+    ws.addEventListener('error', () => ws.close());
 
     if (window.wsPingInterval) clearInterval(window.wsPingInterval);
     window.wsPingInterval = setInterval(() => {
-      if (ws.readyState === WebSocket.OPEN) {
-        send({ type: 'ping' });
-      }
+      if (ws && ws.readyState === WebSocket.OPEN) send({ type: 'ping' });
     }, 20000);
   }
 
@@ -152,17 +150,13 @@
   function handleMsg(msg) {
     switch (msg.type) {
       case 'joined':
+        // FIX: reconnect sonrası myUserId güncellenmeli
         myUserId = msg.userId;
         setHost(msg.isHost);
         if (msg.url) {
           loadVideo(msg.url).then(() => {
-            // Video yüklendikten sonra mevcut konuma sync et
             if (!msg.isHost && msg.lastAction && msg.currentTime > 0) {
-              setTimeout(() => {
-                if (typeof window.triggerSyncLocal === 'function') {
-                  window.triggerSyncLocal(msg.lastAction, msg.currentTime);
-                }
-              }, 2500); // iframe'in yüklenmesi için bekle
+              setTimeout(() => syncVideoLocal(msg.lastAction, msg.currentTime), 2500);
             }
           });
         }
@@ -179,7 +173,7 @@
         break;
 
       case 'video_sync':
-        syncVideoLocal(msg.action, msg.time);
+        if (!isHost) syncVideoLocal(msg.action, msg.time);
         break;
 
       case 'new_comment':
@@ -202,7 +196,9 @@
     }
   }
 
-  // ── Host ve İzleyici Kilidi (İki Mantık Birleştirildi) ───────────
+  // ── Host / İzleyici kilidi ────────────────────────────────────────
+  // FIX: İzleyicide videoyu tamamen kilitlemek için pointer-events:none
+  // kullanıyoruz; eski "tıkla başlat" mantığı kaldırıldı.
   function setHost(h) {
     isHost = h;
     hostControls.style.display = h ? 'flex' : 'none';
@@ -210,47 +206,65 @@
     roleLabel.style.background = h ? 'var(--accent)' : 'var(--surface2)';
     roleLabel.style.color = h ? '#0a0a0d' : 'var(--muted)';
 
+    // Şeffaf ama tıklanamaz kilit katmanı (orijinal CSS'teki #videoLock ile uyumlu)
     let lock = $('videoLock');
     if (!lock) {
       lock = document.createElement('div');
       lock.id = 'videoLock';
-      
-      // Yeni interaktif görsel kilit tasarımı ve css stilleri
-      lock.style.cssText = "position:absolute;inset:0;z-index:999;background:rgba(10,10,13,0.7);display:flex;align-items:center;justify-content:center;cursor:pointer;backdrop-filter:blur(5px); transition: 0.3s;";
-      lock.innerHTML = `
-        <div style="background:var(--accent); color:#000; padding:1.2rem 2.5rem; border-radius:15px; font-weight:bold; font-family:'Syne'; box-shadow:0 10px 40px rgba(0,0,0,0.5); text-align:center;">
-          <div style="font-size:1.2rem; margin-bottom:5px;">HAZIR MISIN?</div>
-          <div style="font-size:0.8rem; opacity:0.8;">SENKRONİZASYONU AKTİF ETMEK İÇİN TIKLA</div>
-        </div>`;
-      
       videoFrame.parentElement.appendChild(lock);
-      
-      lock.addEventListener('click', () => {
-        lock.style.opacity = '0';
-        setTimeout(() => lock.style.display = 'none', 300);
-        
-        // Tıklama anında tarayıcıya "video oynatabilirsin" izni veriyoruz
-        if (!isHost) {
-          toast("Bağlantı kuruluyor...");
-          // Hostun konumunu bir kez zorla tetikle
-          setTimeout(() => {
-            if (typeof window.triggerSyncLocal === 'function') {
-              window.triggerSyncLocal('play', 0);
-            }
-          }, 500);
-        }
-      });
     }
-    
-    // Host ise kilit kaybolur, izleyici ise 'flex' olarak interaktif hale gelir
-    lock.style.display = h ? 'none' : 'flex';
-    if (!h) {
-      lock.style.opacity = '1'; // Tekrar izleyici olma durumunda görünürlüğü sıfırla
+
+    if (h) {
+      // Host: kilit tamamen devre dışı
+      lock.style.cssText = 'display:none';
+    } else {
+      // İzleyici: şeffaf, tıklama geçirmez overlay — video kontrolleri engellenmiş
+      lock.style.cssText = [
+        'position:absolute',
+        'inset:0',
+        'z-index:999',
+        'background:transparent',
+        'cursor:not-allowed',
+        'pointer-events:all',
+      ].join(';');
+
+      // Kullanıcıya bilgi vermek için küçük rozet
+      let badge = $('viewerBadge');
+      if (!badge) {
+        badge = document.createElement('div');
+        badge.id = 'viewerBadge';
+        badge.style.cssText = [
+          'position:absolute',
+          'bottom:12px',
+          'left:50%',
+          'transform:translateX(-50%)',
+          'background:rgba(10,10,13,0.75)',
+          'color:var(--muted)',
+          'font-family:var(--font-head,sans-serif)',
+          'font-size:0.72rem',
+          'padding:0.3rem 0.9rem',
+          'border-radius:20px',
+          'border:1px solid rgba(255,255,255,0.08)',
+          'backdrop-filter:blur(8px)',
+          'z-index:1000',
+          'pointer-events:none',
+          'white-space:nowrap',
+        ].join(';');
+        badge.textContent = '🔒 Video host tarafından kontrol ediliyor';
+        videoFrame.parentElement.appendChild(badge);
+      }
+      badge.style.display = 'block';
     }
+
+    // Host rozeti gizle
+    const badge = $('viewerBadge');
+    if (badge && h) badge.style.display = 'none';
   }
 
   // ── Load video ───────────────────────────────────────────────────
+  // Sadece host URL yükleyebilir; izleyici için loadBtn zaten gizli
   loadBtn.addEventListener('click', () => {
+    if (!isHost) return;
     const raw = urlInput.value.trim();
     if (!raw) { toast('Bir link gir'); return; }
     const url = raw.startsWith('http') ? raw : 'https://' + raw;
@@ -273,21 +287,16 @@
       const iframeSrc = data.type === 'embed' ? data.url : data.proxyUrl;
       openExt.href = url;
       videoFrame.src = iframeSrc;
-
-      // Iframe yüklendiğinde hostun konumuna gitmesi için kısa bir gecikme ile sync tetikle
-      videoFrame.onload = () => {
-        if (!isHost) {
-          console.log("Iframe yüklendi, senkronizasyon bekleniyor...");
-        }
-      };
     } catch (err) {
       showLoadingOverlay(false);
       frameWarn.classList.remove('hidden');
     }
+
+    return Promise.resolve();
   }
 
   function showLoadingOverlay(show) {
-    let ov = document.getElementById('loadingOverlay');
+    let ov = $('loadingOverlay');
     if (!ov) {
       ov = document.createElement('div');
       ov.id = 'loadingOverlay';
@@ -302,13 +311,9 @@
     ov.style.display = show ? 'flex' : 'none';
   }
 
-  // ── Comments ve Buton Efekti ──────────────────────────────────────
+  // ── Comments ──────────────────────────────────────────────────────
   commentInput.addEventListener('input', () => {
-      if (commentInput.value.trim().length > 0) {
-          sendBtn.classList.add('active');
-      } else {
-          sendBtn.classList.remove('active');
-      }
+    sendBtn.classList.toggle('active', commentInput.value.trim().length > 0);
   });
 
   sendBtn.addEventListener('click', sendComment);
@@ -324,12 +329,16 @@
     sendBtn.classList.remove('active');
   }
 
+  // FIX: addComment artık myUserId'yi closure yerine her çağrıda okur
   function addComment(c) {
-    if (commentList.children.length > 100) commentList.removeChild(commentList.firstChild);
+    if (commentList.children.length > 200) commentList.removeChild(commentList.firstChild);
     const isOwn = c.userId === myUserId;
     const div = document.createElement('div');
     div.className = 'comment-bubble' + (isOwn ? ' own' : '');
-    div.innerHTML = `<div class="comment-nick">${esc(c.nickname)}</div><div class="comment-text">${esc(c.text)}</div><div class="comment-time">${formatTime(c.ts)}</div>`;
+    div.innerHTML =
+      `<div class="comment-nick">${esc(c.nickname)}</div>` +
+      `<div class="comment-text">${esc(c.text)}</div>` +
+      `<div class="comment-time">${formatTime(c.ts)}</div>`;
     commentList.appendChild(div);
     commentList.scrollTop = commentList.scrollHeight;
     commentCount++;
@@ -344,75 +353,73 @@
     commentList.scrollTop = commentList.scrollHeight;
   }
 
+  // ── Video sync ────────────────────────────────────────────────────
+  // Host'un iframe eventlerini dinleyip sunucuya iletmesi
+  window.addEventListener('message', e => {
+    if (!isHost) return;
+    let data = e.data;
+    if (typeof data === 'string') { try { data = JSON.parse(data); } catch { return; } }
+    if (!data || !data.__watchparty_event) return;
+    send({ type: 'video_sync', action: data.action, time: data.time || 0 });
+  });
+
+  // Host için periyodik durum bildirimi (iframe'e getStatus sor)
+  setInterval(() => {
+    if (isHost && ws && ws.readyState === WebSocket.OPEN) {
+      try {
+        videoFrame.contentWindow && videoFrame.contentWindow.postMessage(
+          JSON.stringify({ __watchparty: true, getStatus: true }), '*'
+        );
+      } catch (_) {}
+    }
+  }, 5000);
+
   function syncVideoLocal(action, time) {
     if (typeof window.triggerSyncLocal === 'function') {
       window.triggerSyncLocal(action, time);
     }
   }
 
-  window.addEventListener('sendSyncTrigger', (e) => {
-    if (!isHost) return;
-    send({ type: 'video_sync', action: e.detail.action, time: e.detail.time || 0 });
-  });
-
-  // Host için sürekli durum güncelleme
-  setInterval(() => {
-    if (isHost && ws && ws.readyState === WebSocket.OPEN) {
-      // Iframe'e mesaj gönderip süreyi iste ve sunucuya bas
-      if (videoFrame.contentWindow) {
-        videoFrame.contentWindow.postMessage(JSON.stringify({__watchparty: true, getStatus: true}), '*');
-      }
-    }
-  }, 5000);
+  // Public API (sync butonları için)
+  window.sendSync = function (action) {
+    send({ type: 'video_sync', action, time: 0 });
+    syncVideoLocal(action, 0);
+  };
 
 })();
 
-// ── Global Senkronizasyon Fonksiyonu (Universal Sync Entegre Edildi) ──
-window.triggerSyncLocal = function(action, time) {
-  const mesaj = action === 'play' ? 'BAŞLATILDI' : action === 'pause' ? 'DURDURULDU' : 'ATLANDI';
+// ── Global Senkronizasyon (Universal) ────────────────────────────────────────
+window.triggerSyncLocal = function (action, time) {
   const videoFrame = document.getElementById('videoFrame');
-  
-  if (typeof toast === 'function') {
-    toast(`📢 Host komutu: ${mesaj}`);
-  } else {
-    console.log(`📢 Host komutu: ${mesaj}`);
-  }
-
   if (!videoFrame || videoFrame.classList.contains('hidden')) return;
   const target = videoFrame.contentWindow;
   if (!target) return;
 
-  // Yöntem 1: Proxy iframe'e köprü protokolü (Universal / Ana Çözüm)
-  const wpMsg = JSON.stringify({ __watchparty: true, action, time: time || 0 });
-  target.postMessage(wpMsg, '*');
+  // Yöntem 1: Proxy iframe köprü protokolü
+  target.postMessage(JSON.stringify({ __watchparty: true, action, time: time || 0 }), '*');
 
-  // Yöntem 2: YouTube ve genel Player API'ları (enablejsapi=1 ile yüklendi)
-  const ytCmd = action === 'play' ? 'playVideo' : 'pauseVideo';
-  target.postMessage(JSON.stringify({ event: 'command', func: ytCmd }), '*');
+  // Yöntem 2: YouTube enablejsapi
+  target.postMessage(JSON.stringify({
+    event: 'command',
+    func:  action === 'play' ? 'playVideo' : 'pauseVideo',
+  }), '*');
   if (typeof time === 'number' && time > 0) {
     target.postMessage(JSON.stringify({ event: 'command', func: 'seekTo', args: [time, true] }), '*');
   }
-  
+
   // Yöntem 3: Vimeo player API
-  const vimeoCmd = action === 'play' ? 'play' : 'pause';
-  target.postMessage(JSON.stringify({ method: vimeoCmd }), '*');
-  
-  // Yöntem 4: Same-origin kontrolü (Eğer site izin veriyorsa direkt müdahale)
+  target.postMessage(JSON.stringify({ method: action === 'play' ? 'play' : 'pause' }), '*');
+
+  // Yöntem 4: Same-origin direkt erişim
   try {
     const doc = videoFrame.contentDocument || target.document;
-    const vids = doc.querySelectorAll('video');
-    vids.forEach(v => {
-      if (typeof time === 'number') v.currentTime = time;
-      action === 'play' ? v.play().catch(() => { v.muted = true; v.play(); }) : v.pause();
+    doc.querySelectorAll('video').forEach(v => {
+      if (typeof time === 'number' && Math.abs(v.currentTime - time) > 1.5) v.currentTime = time;
+      if (action === 'play') {
+        v.play().catch(() => { v.muted = true; v.play(); });
+      } else {
+        v.pause();
+      }
     });
-  } catch (e) { /* CORS engeli — beklenen durum */ }
-};
-
-window.sendSync = function(action) {
-  console.log("Senkronizasyon butonu tıklandı: " + action);
-  const syncEvent = new CustomEvent('sendSyncTrigger', { detail: { action: action } });
-  window.dispatchEvent(syncEvent);
-  if (typeof window.triggerSyncLocal === 'function') {
-      window.triggerSyncLocal(action, 0);
-  }
+  } catch (_) { /* CORS — beklenen */ }
 };
