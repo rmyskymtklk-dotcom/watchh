@@ -12,6 +12,7 @@ app.use(cors());
 app.use(express.json());
 app.use(express.static(path.join(__dirname, '../public')));
 const rooms = {};
+
 function resolveEmbedUrl(rawUrl) {
   try {
     const u = new URL(rawUrl.startsWith('http') ? rawUrl : 'https://' + rawUrl);
@@ -44,6 +45,7 @@ function resolveEmbedUrl(rawUrl) {
     return { type: 'proxy', url: rawUrl };
   }
 }
+
 // Bir sayfayı fetch edip içindeki video embed iframe src'sini çıkarır
 async function scrapeEmbedFromPage(pageUrl) {
   try {
@@ -118,6 +120,7 @@ app.get('/api/resolve', async (req, res) => {
   if (result.type === 'proxy') result.proxyUrl = '/proxy?url=' + encodeURIComponent(result.url);
   res.json(result);
 });
+
 app.all('/proxy', async (req, res) => {
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS, PUT, PATCH, DELETE');
@@ -456,27 +459,40 @@ app.all('/proxy', async (req, res) => {
     res.status(500).send(`<html><body style="background:#111;color:#ff6b6b;text-align:center;padding:2rem;"><h2>⚠️ Proxy Hatası: Video alınamadı</h2><p style="color:#aaa;font-size:0.9rem;">${err.message}</p></body></html>`);
   }
 });
+
 app.post('/api/room/create', (req, res) => {
   const roomId = uuidv4().slice(0, 8).toUpperCase();
   rooms[roomId] = { url: '', comments: [], users: {}, hostId: null, currentTime: 0, lastAction: null };
   res.json({ roomId });
 });
+
 app.get('/api/room/:roomId', (req, res) => {
   const room = rooms[req.params.roomId];
   if (!room) return res.status(404).json({ error: 'Oda bulunamadı' });
   res.json({ url: room.url, comments: room.comments, userCount: Object.keys(room.users).length, currentTime: room.currentTime, lastAction: room.lastAction });
 });
+
 wss.on('connection', (ws) => {
+  // YENİ: Tarayıcının yerleşik WebSocket ping'ine otomatik cevap verip yaşayıp yaşamadığını kontrol eder
+  ws.isAlive = true;
+  ws.on('pong', () => { ws.isAlive = true; });
+
   let currentRoom = null;
   let userId      = uuidv4().slice(0, 6);
   let nickname    = 'Misafir';
+  
   ws.on('message', (raw) => {
     let msg;
     try { msg = JSON.parse(raw); } catch { return; }
     switch (msg.type) {
       case 'join': {
         const { roomId, nick } = msg;
-        if (!rooms[roomId]) return ws.send(JSON.stringify({ type: 'error', text: 'Oda bulunamadı' }));
+        
+        // GÜNCELLENDİ: Oda yoksa hata vermek yerine yeniden oluştur (Sunucu yeniden başlarsa bağlantı kopmasın)
+        if (!rooms[roomId]) {
+            rooms[roomId] = { url: '', comments: [], users: {}, hostId: null, currentTime: 0, lastAction: null };
+        }
+        
         currentRoom = roomId;
         nickname = nick || 'Misafir';
         rooms[roomId].users[userId] = { ws, nickname };
@@ -513,6 +529,7 @@ wss.on('connection', (ws) => {
         break;
     }
   });
+  
   ws.on('close', () => {
     if (!currentRoom || !rooms[currentRoom]) return;
     delete rooms[currentRoom].users[userId];
@@ -524,6 +541,7 @@ wss.on('connection', (ws) => {
     broadcast(currentRoom, { type: 'user_left', nickname, userCount: remaining.length });
   });
 });
+
 function broadcast(roomId, msg, excludeUserId = null) {
   if (!rooms[roomId]) return;
   const data = JSON.stringify(msg);
@@ -531,5 +549,16 @@ function broadcast(roomId, msg, excludeUserId = null) {
     if (uid !== excludeUserId && ws.readyState === WebSocket.OPEN) ws.send(data);
   });
 }
+
+// YENİ: Her 30 saniyede bir zombi bağlantıları bulur ve zorla kapatır. 
+// Bu sayede RAM şişmez ve kullanıcı tarafı kopuşu hızlıca fark eder.
+setInterval(() => {
+  wss.clients.forEach((ws) => {
+    if (ws.isAlive === false) return ws.terminate();
+    ws.isAlive = false;
+    ws.ping(); 
+  });
+}, 30000);
+
 const PORT = process.env.PORT || 3000;
 server.listen(PORT, '0.0.0.0', () => console.log(`\n🎬 WatchParty çalışıyor → http://localhost:${PORT}\n`));

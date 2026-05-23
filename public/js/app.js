@@ -8,6 +8,8 @@
   let roomId = null;
   let commentCount = 0;
   let myNick = 'Misafir';
+  let pongTimeout; // YENİ: Zamanlayıcı değişkeni eklendi
+
   const $ = id => document.getElementById(id);
   const lobby = $('lobby');
   const room = $('room');
@@ -30,6 +32,7 @@
   const commentCnt = $('commentCount');
   const commentInput = $('commentInput');
   const sendBtn = $('sendBtn');
+
   function toast(msg) {
     const el = document.createElement('div');
     el.className = 'toast';
@@ -37,9 +40,9 @@
     document.body.appendChild(el);
     setTimeout(() => el.remove(), 2700);
   }
+
   // --- TAM EKRAN (FULLSCREEN) ÇÖZÜMÜ ---
   // Sadece .video-panel'i büyütür, sayfanın geri kalanını etkilemez.
-
   function setupFullscreen() {
     const trySetup = () => {
       const panel = document.querySelector('.video-panel');
@@ -90,10 +93,8 @@
           updateFsIcon(fsBtn, false);
         }
       });
-      // Native fullscreen kullanılmıyor, listener gerekmiyor.
     };
 
-    // #room henüz gizliyse görünür olana kadar bekle
     const roomEl = document.getElementById('room');
     if (roomEl && roomEl.classList.contains('hidden')) {
       const obs = new MutationObserver(() => {
@@ -116,9 +117,6 @@
 
   function toggleFS(panel) {
     const fsBtn = document.getElementById('wp-fs-btn');
-    // Native fullscreen kullanmıyoruz — iframe içeriği tarayıcının
-    // kendi tam ekranını tetikleyip sitenin tamamını gösteriyor.
-    // Sadece CSS ile paneli fixed konuma alıyoruz.
     const isCssFS = panel.classList.contains('wp-css-fullscreen');
     if (!isCssFS) {
       panel.classList.add('wp-css-fullscreen');
@@ -128,7 +126,7 @@
       updateFsIcon(fsBtn, false);
     }
   }
-  // ------------------------------------------
+
   window.addEventListener('DOMContentLoaded', () => {
     const r = new URLSearchParams(location.search).get('room');
     if (r && roomCodeIn) {
@@ -137,10 +135,12 @@
     }
     setupFullscreen();
   });
+
   function formatTime(ts) {
     const d = new Date(ts);
     return d.getHours().toString().padStart(2, '0') + ':' + d.getMinutes().toString().padStart(2, '0');
   }
+
   function getNick() {
       return (nickInput && nickInput.value.trim()) ? nickInput.value.trim() : 'Misafir';
   }
@@ -149,6 +149,7 @@
       if (!str) return '';
       return String(str).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
   }
+
   if(createBtn) createBtn.addEventListener('click', async () => {
     try {
       const res = await fetch('/api/room/create', { method: 'POST' });
@@ -158,14 +159,17 @@
         toast('Oda oluşturulamadı: ' + e.message);
     }
   });
+
   if(joinBtn) joinBtn.addEventListener('click', () => {
     if(!roomCodeIn) return;
     const code = roomCodeIn.value.trim().toUpperCase();
     if (code.length < 6) return toast('Geçerli bir oda kodu gir');
     enterRoom(code, getNick());
   });
+
   if(roomCodeIn) roomCodeIn.addEventListener('keydown', e => { if (e.key === 'Enter') joinBtn.click(); });
   if(nickInput) nickInput.addEventListener('keydown', e => { if (e.key === 'Enter') createBtn.click(); });
+
   function enterRoom(id, nick) {
     roomId = id;
     myNick = nick;
@@ -175,9 +179,12 @@
     setHost(false);
     connectWS(id, nick);
   }
+
   if(copyRoomBtn) copyRoomBtn.addEventListener('click', () => {
     navigator.clipboard.writeText(`${location.origin}?room=${roomId}`).then(() => toast('✓ Link kopyalandı!'));
   });
+
+  // YENİ: Güncellenmiş connectWS fonksiyonu
   function connectWS(id, nick) {
     const proto = location.protocol === 'https:' ? 'wss' : 'ws';
     if (ws) { ws.onclose = null; ws.close(); }
@@ -185,42 +192,64 @@
    
     ws.addEventListener('open', () => send({ type: 'join', roomId: id, nick }));
    
-    // SESSİZCE YUTULAN HATA BURADA ÇÖZÜLDÜ: Artık tüm veriler güvenli alınıyor
     ws.addEventListener('message', e => {
         let msg;
-        try {
-            msg = JSON.parse(e.data);
-        } catch(err) { return; }
+        try { msg = JSON.parse(e.data); } catch(err) { return; }
        
-        try {
-            handleMsg(msg);
-        } catch(err) {
-            console.error('Mesaj işleme hatası:', err);
+        // YENİ: Sunucudan Pong gelirse geri sayımı iptal et
+        if (msg.type === 'pong') {
+            clearTimeout(pongTimeout);
+            return;
         }
+        
+        try { handleMsg(msg); } catch(err) { console.error('Mesaj işleme hatası:', err); }
     });
    
     ws.addEventListener('close', () => setTimeout(() => { if (roomId) connectWS(roomId, myNick); }, 2000));
     ws.addEventListener('error', () => ws.close());
    
+    // GÜNCELLENDİ: Daha agresif bir Ping/Pong kontrolü
     if (window.wsPingInterval) clearInterval(window.wsPingInterval);
-    window.wsPingInterval = setInterval(() => { if (ws && ws.readyState === 1) send({ type: 'ping' }); }, 20000);
+    window.wsPingInterval = setInterval(() => { 
+        if (ws && ws.readyState === 1) {
+            send({ type: 'ping' });
+            
+            // 5 saniye içinde sunucu cevap vermezse bağlantı ölmüştür, yeniden bağlan
+            pongTimeout = setTimeout(() => {
+                ws.close(); 
+            }, 5000);
+        }
+    }, 20000);
   }
+
   function send(obj) {
       if (ws && ws.readyState === 1) ws.send(JSON.stringify(obj));
   }
+
+  // YENİ: Güncellenmiş handleMsg fonksiyonu
   function handleMsg(msg) {
     switch (msg.type) {
       case 'joined':
         myUserId = msg.userId;
         setHost(msg.isHost);
-        if (msg.url) {
+        
+        // YENİ: Tekrar bağlanıldığında yorumların çiftleşmesini engelle
+        if (commentList) {
+            commentList.innerHTML = '';
+            commentCount = 0;
+        }
+        if (msg.comments) msg.comments.forEach(addComment);
+
+        // YENİ: Video sadece ilk defa veya link değiştiyse yüklensin (gereksiz atılmaları önler)
+        if (msg.url && (!videoFrame.src || !videoFrame.src.includes(encodeURIComponent(msg.url)))) {
             loadVideo(msg.url).then(() => {
                 if (!msg.isHost && msg.lastAction) {
                     setTimeout(() => syncVideoLocal(msg.lastAction, msg.currentTime), 2000);
                 }
             });
+        } else if (!msg.isHost && msg.lastAction) {
+            syncVideoLocal(msg.lastAction, msg.currentTime);
         }
-        if (msg.comments) msg.comments.forEach(addComment);
         break;
       case 'you_are_host':
         setHost(true);
@@ -252,6 +281,7 @@
         break;
     }
   }
+
   function setHost(h) {
     isHost = h;
     if(hostControls) hostControls.style.display = h ? 'flex' : 'none';
@@ -279,6 +309,7 @@
       if (badge) badge.style.display = 'none';
     }
   }
+
   if(loadBtn) loadBtn.addEventListener('click', () => {
     if (!isHost) return;
     if(!urlInput) return;
@@ -288,6 +319,7 @@
     send({ type: 'set_url', url });
     loadVideo(url);
   });
+
   async function loadVideo(url) {
     if (!url) return;
     if(placeholder) placeholder.classList.add('hidden');
@@ -314,6 +346,7 @@
         if(frameWarn) frameWarn.classList.remove('hidden');
     }
   }
+
   function showLoadingOverlay(show) {
     let ov = $('loadingOverlay');
     if (!ov) {
@@ -327,13 +360,16 @@
     }
     ov.style.display = show ? 'flex' : 'none';
   }
+
   if(commentInput) commentInput.addEventListener('input', () => {
       if(sendBtn) sendBtn.classList.toggle('active', commentInput.value.trim().length > 0);
   });
+
   if(sendBtn) sendBtn.addEventListener('click', sendComment);
   if(commentInput) commentInput.addEventListener('keydown', e => {
       if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendComment(); }
   });
+
   function sendComment() {
     if(!commentInput) return;
     const text = commentInput.value.trim();
@@ -342,6 +378,7 @@
     commentInput.value = '';
     if(sendBtn) sendBtn.classList.remove('active');
   }
+
   function addComment(c) {
     if (!commentList) return;
     if (commentList.children.length > 200) commentList.removeChild(commentList.firstChild);
@@ -362,6 +399,7 @@
     commentList.appendChild(div);
     commentList.scrollTop = commentList.scrollHeight;
   }
+
   window.addEventListener('message', e => {
     if (!isHost) return;
     let data = e.data;
@@ -372,6 +410,7 @@
         send({ type: 'video_sync', action: data.action, time: data.time || 0 });
     }
   });
+
   let lastBroadcastTime = -1;
   setInterval(() => {
     if (!isHost || !ws || ws.readyState !== 1) return;
@@ -385,6 +424,7 @@
       send({ type: 'video_sync', action: 'seek', time: currentTime });
     }
   }, 3000);
+
   function syncVideoLocal(action, time) {
     if (typeof window.triggerSyncLocal === 'function') window.triggerSyncLocal(action, time);
    
@@ -417,6 +457,7 @@
       syncVideoLocal(action, 0);
   };
 })();
+
 // ── Global Senkronizasyon (Universal) ────────────────────────────────────────
 window.triggerSyncLocal = function (action, time) {
   const videoFrame = document.getElementById('videoFrame');
