@@ -1,14 +1,14 @@
 const express = require('express');
-const http    = require('http');
+const http = require('http');
 const WebSocket = require('ws');
-const fetch   = require('node-fetch');
-const path    = require('path');
-const cors    = require('cors');
+const fetch = require('node-fetch');
+const path = require('path');
+const cors = require('cors');
 const { v4: uuidv4 } = require('uuid');
 
-const app    = express();
+const app = express();
 const server = http.createServer(app);
-const wss    = new WebSocket.Server({ server });
+const wss = new WebSocket.Server({ server });
 
 app.use(cors());
 app.use(express.json());
@@ -16,89 +16,99 @@ app.use(express.static(path.join(__dirname, '../public')));
 
 const rooms = {};
 
-// ─── /api/resolve (Aynı Kalıyor) ─────────────────────────────────────────────
-// (Kodun bu kısmı doğruydu, buraya dokunmana gerek yok)
+function resolveEmbedUrl(rawUrl) {
+  try {
+    const u = new URL(rawUrl.startsWith('http') ? rawUrl : 'https://' + rawUrl);
+    const host = u.hostname.replace('www.', '');
+    if (host === 'youtube.com' || host === 'youtu.be') {
+      let vid = u.searchParams.get('v');
+      if (!vid && host === 'youtu.be') vid = u.pathname.slice(1).split('?')[0];
+      if (!vid && u.pathname.startsWith('/shorts/')) vid = u.pathname.split('/shorts/')[1].split('?')[0];
+      if (vid) return { type: 'embed', url: `https://www.youtube-nocookie.com/embed/${vid}?autoplay=1&rel=0&enablejsapi=1` };
+    }
+    if (host === 'bilibili.com') {
+      const match = u.pathname.match(/\/video\/((?:BV|av)[\w]+)/i);
+      if (match) {
+        const vid = match[1];
+        const param = vid.toUpperCase().startsWith('BV') ? `bvid=${vid}` : `aid=${vid.slice(2)}`;
+        return { type: 'embed', url: `https://player.bilibili.com/player.html?${param}&autoplay=1&high_quality=1&danmaku=0&as_wide=1` };
+      }
+    }
+    if (host === 'bilibili.tv') return { type: 'proxy', url: rawUrl };
+    if (host === 'vimeo.com') {
+      const vid = u.pathname.split('/').filter(Boolean)[0];
+      if (vid && /^\d+$/.test(vid)) return { type: 'embed', url: `https://player.vimeo.com/video/${vid}?autoplay=1` };
+    }
+    if (host === 'dailymotion.com') {
+      const vid = u.pathname.split('/video/')[1];
+      if (vid) return { type: 'embed', url: `https://www.dailymotion.com/embed/video/${vid}?autoplay=1` };
+    }
+    return { type: 'proxy', url: rawUrl };
+  } catch { return { type: 'proxy', url: rawUrl }; }
+}
 
-// ─── Proxy endpoint (Gelişmiş) ────────────────────────────────────────────────
-app.all('/proxy', async (req, res) => {
-    // ... (Proxy kodun aynı kalabilir, sadece broadcast kısmını düzeltiyoruz)
-    // Eğer proxy kısmında bir değişiklik yapmadıysan oraya dokunma, sadece aşağıya odaklan.
-    // ...
+app.get('/api/resolve', (req, res) => {
+  const raw = req.query.url;
+  if (!raw) return res.status(400).json({ error: 'url gerekli' });
+  const result = resolveEmbedUrl(raw);
+  if (result.type === 'proxy') result.proxyUrl = '/proxy?url=' + encodeURIComponent(result.url);
+  res.json(result);
 });
 
-// ─── WebSocket Broadcast (DÜZELTİLDİ) ─────────────────────────────────────────
+app.all('/proxy', async (req, res) => {
+  res.setHeader('Access-Control-Allow-Origin', '*');
+  res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS, PUT, PATCH, DELETE');
+  res.setHeader('Access-Control-Allow-Headers', 'X-Requested-With,content-type,authorization,range,accept');
+  if (req.method === 'OPTIONS') return res.status(200).end();
+  const targetUrl = req.query.url;
+  if (!targetUrl) return res.status(400).send('url param required');
+  try {
+    const parsedTarget = new URL(targetUrl);
+    const targetOrigin = parsedTarget.origin;
+    const response = await fetch(targetUrl, {
+      method: req.method,
+      headers: { 'User-Agent': req.headers['user-agent'] || 'Mozilla/5.0', 'Referer': targetOrigin + '/' },
+      body: ['GET', 'HEAD'].includes(req.method) ? undefined : req.body,
+      compress: false 
+    });
+    const ct = (response.headers.get('content-type') || '').toLowerCase();
+    res.removeHeader('X-Frame-Options');
+    res.setHeader('X-Frame-Options', 'ALLOWALL');
+    ['content-type', 'content-length', 'content-range', 'accept-ranges', 'transfer-encoding'].forEach(h => {
+      if (response.headers.has(h)) res.setHeader(h, response.headers.get(h));
+    });
+    res.status(response.status);
+    if (!ct.includes('text/html')) return response.body.pipe(res);
+    let body = await response.text();
+    body = body.replace(/ sandbox=["'][^"']*["']/gi, '').replace(/ integrity=["'][^"']*["']/gi, '');
+    const interceptor = `<head><meta name="referrer" content="no-referrer"><script>(function(){ var toP = function(u){ try{ return '/proxy?url=' + encodeURIComponent(new URL(u, document.baseURI).href); } catch(e){ return u; } }; var oF = window.fetch; window.fetch = function(){ var a = Array.prototype.slice.call(arguments); if(a[0] && typeof a[0] === 'string') a[0] = toP(a[0]); return oF.apply(this, a); }; })();</script>`;
+    body = body.replace(/<head>/i, interceptor);
+    body = body.replace(/(href|src|data-src|data-href)=["']([^"']+)["']/gi, (match, attr, url) => {
+        if (url.includes('/proxy?url=')) return match;
+        let fullUrl = url.startsWith('http') ? url : (url.startsWith('//') ? 'https:' + url : (url.startsWith('/') ? targetOrigin + url : targetOrigin + '/' + url));
+        return `${attr}="/proxy?url=${encodeURIComponent(fullUrl)}"`;
+    });
+    res.send(body);
+  } catch (err) { res.status(500).send('Hata'); }
+});
+
 wss.on('connection', (ws) => {
   let currentRoom = null;
-  let userId      = uuidv4().slice(0, 6);
-  let nickname    = 'Misafir';
-
+  let userId = uuidv4().slice(0, 6);
   ws.on('message', (raw) => {
-    let msg;
-    try { 
-        msg = JSON.parse(raw); 
-    } catch(e) { return; }
-
-    if (!msg || !msg.type) return;
-
-    switch (msg.type) {
-      case 'join': {
-        const { roomId, nick } = msg;
-        if (!rooms[roomId]) rooms[roomId] = { url: '', comments: [], users: {}, hostId: null, currentTime: 0, lastAction: null };
-        
-        currentRoom = roomId; 
-        nickname = nick || 'Misafir';
-        rooms[roomId].users[userId] = ws; // WS nesnesini kaydet
-        if (!rooms[roomId].hostId) rooms[roomId].hostId = userId;
-        
-        ws.send(JSON.stringify({ type: 'joined', userId, isHost: rooms[roomId].hostId === userId, url: rooms[roomId].url, comments: rooms[roomId].comments, currentTime: rooms[roomId].currentTime || 0, lastAction: rooms[roomId].lastAction || null }));
-        broadcast(roomId, { type: 'user_joined', nickname, userCount: Object.keys(rooms[roomId].users).length });
-        break;
-      }
-      case 'set_url': {
-        if (!currentRoom || rooms[currentRoom].hostId !== userId) return;
-        rooms[currentRoom].url = msg.url; 
-        rooms[currentRoom].currentTime = 0; 
-        rooms[currentRoom].lastAction = null;
-        broadcast(currentRoom, { type: 'url_changed', url: msg.url });
-        break;
-      }
-      case 'comment': {
-        if (!currentRoom || !msg.text || !msg.text.trim()) return;
-        const comment = { id: uuidv4().slice(0, 8), userId, nickname, text: msg.text.trim(), ts: Date.now() };
-        rooms[currentRoom].comments.push(comment);
-        if (rooms[currentRoom].comments.length > 200) rooms[currentRoom].comments.splice(0, 1);
-        broadcast(currentRoom, { type: 'new_comment', comment });
-        break;
-      }
-      case 'video_sync': {
-        if (!currentRoom || rooms[currentRoom].hostId !== userId) return; 
-        rooms[currentRoom].currentTime = msg.time; 
-        rooms[currentRoom].lastAction = msg.action;
-        broadcast(currentRoom, { type: 'video_sync', action: msg.action, time: msg.time });
-        break;
-      }
+    let msg = JSON.parse(raw);
+    if (msg.type === 'join') {
+        currentRoom = msg.roomId;
+        if(!rooms[currentRoom]) rooms[currentRoom] = { users:{}, comments:[], url:'' };
+        rooms[currentRoom].users[userId] = ws;
+        if(!rooms[currentRoom].hostId) rooms[currentRoom].hostId = userId;
+        ws.send(JSON.stringify({ type: 'joined', userId, isHost: rooms[currentRoom].hostId === userId, comments: rooms[currentRoom].comments }));
+    } else {
+        if(msg.type === 'comment') rooms[currentRoom].comments.push({ nickname: msg.nick, text: msg.text });
+        Object.values(rooms[currentRoom].users).forEach(c => c.send(JSON.stringify(msg)));
     }
-  });
-
-  ws.on('close', () => {
-    if (!currentRoom || !rooms[currentRoom]) return;
-    delete rooms[currentRoom].users[userId];
-    const remaining = Object.keys(rooms[currentRoom].users);
-    broadcast(currentRoom, { type: 'user_left', nickname, userCount: remaining.length });
   });
 });
-
-// YORUMLARI VE BİLDİRİMLERİ TÜM KULLANICILARA GÖNDEREN GÜVENLİ FONKSİYON
-function broadcast(roomId, msg) {
-  if (!rooms[roomId]) return;
-  const data = JSON.stringify(msg);
-  Object.keys(rooms[roomId].users).forEach(uid => {
-    const client = rooms[roomId].users[uid];
-    if (client.readyState === WebSocket.OPEN) {
-      client.send(data);
-    }
-  });
-}
 
 const PORT = process.env.PORT || 3000;
 server.listen(PORT, '0.0.0.0', () => console.log(`\n🎬 WatchParty çalışıyor → http://localhost:${PORT}\n`));
