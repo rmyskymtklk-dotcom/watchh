@@ -181,12 +181,10 @@ app.all('/proxy', async (req, res) => {
     if(typeof data === 'string'){ try{ data = JSON.parse(data); }catch(err){ return; } }
     if(!data) return;
 
-    // YENİ: Host/İzleyici Rol Algılayıcısı (Sadece videonun tıklanmasını kilitler, sayfa kaydırmayı serbest bırakır)
     if(data.__watchparty_role){
         isViewer = (data.__watchparty_role === 'viewer');
         var styleId = 'wp-viewer-lock';
         var existing = document.getElementById(styleId);
-        
         if (isViewer && !existing) {
             var s = document.createElement('style');
             s.id = styleId;
@@ -195,7 +193,6 @@ app.all('/proxy', async (req, res) => {
         } else if (!isViewer && existing) {
             existing.remove();
         }
-        
         document.querySelectorAll('iframe').forEach(function(f){
            try{ f.contentWindow.postMessage(JSON.stringify(data), '*'); }catch(err){}
         });
@@ -229,7 +226,11 @@ app.all('/proxy', async (req, res) => {
   function applyCmdToVideo(v, action, time) {
       try{
         if(typeof time === 'number' && Math.abs(v.currentTime - time) > 1.5) v.currentTime = time;
-        if(action === 'play'){
+        
+        // YENİ: Mobilden tıklanarak sesi açma eylemi tetiklendiğinde burası çalışır
+        if(action === 'unmute') {
+            v.muted = false;
+        } else if(action === 'play'){
           var p = v.play();
           if(p && p.catch) p.catch(function(){ v.muted = true; v.play().catch(function(){}); });
         } else if(action === 'pause'){
@@ -239,7 +240,13 @@ app.all('/proxy', async (req, res) => {
   }
 
   function applyCmd(action, time){
-    triggerCustomPlayers(action);
+    if (action === 'unmute') {
+        try{ if(typeof jwplayer === 'function') jwplayer().setMute(false); }catch(e){}
+        try{ if(typeof videojs === 'function'){ var vjs=videojs.getPlayers(); for(var k in vjs)vjs[k].muted(false); } }catch(e){}
+    } else {
+        triggerCustomPlayers(action);
+    }
+    
     document.querySelectorAll('video').forEach(function(v){ applyCmdToVideo(v, action, time); });
     document.querySelectorAll('iframe').forEach(function(f){
       try{ f.contentWindow.postMessage(JSON.stringify({__watchparty:true, action:action, time:time}), '*'); }catch(err){}

@@ -103,7 +103,6 @@
     roleLabel.style.background = h ? 'var(--accent)' : 'var(--surface2)';
     roleLabel.style.color = h ? '#0a0a0d' : 'var(--muted)';
 
-    // YENİ: Iframe'e izleyici/host rolünü bildir. Oynatıcı butonlarına tıklamayı proxy kapatacak.
     try {
       const target = document.getElementById('videoFrame');
       if (target && target.contentWindow) {
@@ -111,11 +110,6 @@
       }
     } catch(e) {}
 
-    // YENİ: İzleyicinin sayfayı kaydırmasını (scroll) tamamen bozan görünmez kilidi SİLDİK!
-    let lock = document.getElementById('videoLock');
-    if (lock) lock.remove();
-
-    // Sadece ekranın altında küçük bilgi rozeti göster
     let badge = $('viewerBadge');
     if (!h) {
       if (!badge) {
@@ -149,13 +143,9 @@
       openExt.href = url;
       videoFrame.src = data.type === 'embed' ? data.url : data.proxyUrl;
       
-      // Iframe tamamen yüklendiğinde izleyici/host yetkisini güvenli bir şekilde tekrar içeri aktar
       videoFrame.onload = () => {
-          try {
-              videoFrame.contentWindow.postMessage(JSON.stringify({ __watchparty_role: isHost ? 'host' : 'viewer' }), '*');
-          } catch(e) {}
+          try { videoFrame.contentWindow.postMessage(JSON.stringify({ __watchparty_role: isHost ? 'host' : 'viewer' }), '*'); } catch(e) {}
       };
-
     } catch (err) { showLoadingOverlay(false); frameWarn.classList.remove('hidden'); }
   }
 
@@ -213,7 +203,31 @@
     }
   }, 3000);
 
-  function syncVideoLocal(action, time) { if (typeof window.triggerSyncLocal === 'function') window.triggerSyncLocal(action, time); }
+  function syncVideoLocal(action, time) { 
+    if (typeof window.triggerSyncLocal === 'function') window.triggerSyncLocal(action, time); 
+    
+    // MOBİL DÜZELTME: Host oynattığında, İzleyicinin ekrana dokunarak sesi açabilmesi için buton oluştur.
+    if (action === 'play' && !isHost) {
+        let unmuteBtn = document.getElementById('wp-unmute-btn');
+        if (!unmuteBtn) {
+            unmuteBtn = document.createElement('button');
+            unmuteBtn.id = 'wp-unmute-btn';
+            unmuteBtn.innerHTML = '🔊 Sesi Aç (Tıkla)';
+            unmuteBtn.style.cssText = 'position:absolute; top:20px; left:50%; transform:translateX(-50%); z-index:9999; padding:12px 24px; background:var(--accent); color:#0a0a0d; border:none; border-radius:24px; font-weight:800; font-family:var(--font-head); cursor:pointer; box-shadow:0 8px 32px rgba(0,0,0,0.6); font-size:0.9rem; animation:bubbleIn 0.3s ease;';
+            unmuteBtn.onclick = () => {
+                const vf = document.getElementById('videoFrame');
+                if(vf && vf.contentWindow) {
+                    vf.contentWindow.postMessage(JSON.stringify({ __watchparty: true, action: 'unmute' }), '*');
+                }
+                unmuteBtn.style.display = 'none';
+                toast('🔊 Ses açıldı!');
+            };
+            document.querySelector('.video-panel').appendChild(unmuteBtn);
+        } else {
+            unmuteBtn.style.display = 'block';
+        }
+    }
+  }
   window.sendSync = function (action) { send({ type: 'video_sync', action, time: 0 }); syncVideoLocal(action, 0); };
 
 })();
@@ -244,7 +258,9 @@ window.triggerSyncLocal = function (action, time) {
       if (typeof time === 'number' && Math.abs(v.currentTime - time) > 1.5) v.currentTime = time;
       if (action === 'pause') {
         try { v.pause(); } catch (_) { setTimeout(() => { try { v.pause(); } catch (__) {} }, 50); }
-      } else { v.play().catch(() => { v.muted = true; v.play(); }); }
+      } else if (action === 'play') { 
+        v.play().catch(() => { v.muted = true; v.play(); }); 
+      }
     });
   } catch (_) {}
 };
