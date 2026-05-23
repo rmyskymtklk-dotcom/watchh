@@ -3,7 +3,14 @@
   'use strict';
  
   let ws = null;
-  let myUserId = null;
+  
+  // YENİ: LocalStorage kullanarak kalıcı bir kullanıcı kimliği (ID) oluşturuyoruz.
+  let myUserId = localStorage.getItem('wp_userId');
+  if (!myUserId) {
+    myUserId = Math.random().toString(36).substring(2, 10);
+    localStorage.setItem('wp_userId', myUserId);
+  }
+  
   let isHost = false;
   let roomId = null;
   let commentCount = 0;
@@ -190,7 +197,8 @@
     if (ws) { ws.onclose = null; ws.close(); }
     ws = new WebSocket(`${proto}://${location.host}`);
    
-    ws.addEventListener('open', () => send({ type: 'join', roomId: id, nick }));
+    // GÜNCELLENDİ: Sunucuya kalıcı ID'mizi de gönderiyoruz
+    ws.addEventListener('open', () => send({ type: 'join', roomId: id, nick, userId: myUserId }));
    
     ws.addEventListener('message', e => {
         let msg;

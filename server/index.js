@@ -473,55 +473,73 @@ app.get('/api/room/:roomId', (req, res) => {
 });
 
 wss.on('connection', (ws) => {
-  // YENİ: Tarayıcının yerleşik WebSocket ping'ine otomatik cevap verip yaşayıp yaşamadığını kontrol eder
   ws.isAlive = true;
   ws.on('pong', () => { ws.isAlive = true; });
 
-  let currentRoom = null;
-  let userId      = uuidv4().slice(0, 6);
-  let nickname    = 'Misafir';
+  // Değişkenleri global yerine soket (ws) üzerine tanımlıyoruz
+  ws.userId = null;
+  ws.roomId = null;
+  ws.nickname = 'Misafir';
   
   ws.on('message', (raw) => {
     let msg;
     try { msg = JSON.parse(raw); } catch { return; }
+    
     switch (msg.type) {
       case 'join': {
-        const { roomId, nick } = msg;
+        const { roomId, nick, userId } = msg;
         
-        // GÜNCELLENDİ: Oda yoksa hata vermek yerine yeniden oluştur (Sunucu yeniden başlarsa bağlantı kopmasın)
         if (!rooms[roomId]) {
             rooms[roomId] = { url: '', comments: [], users: {}, hostId: null, currentTime: 0, lastAction: null };
         }
         
-        currentRoom = roomId;
-        nickname = nick || 'Misafir';
-        rooms[roomId].users[userId] = { ws, nickname };
-        if (!rooms[roomId].hostId) rooms[roomId].hostId = userId;
+        ws.roomId = roomId;
+        ws.userId = userId || uuidv4().slice(0, 6);
+        ws.nickname = nick || 'Misafir';
+        
+        rooms[roomId].users[ws.userId] = { ws, nickname: ws.nickname };
+        
+        // Host yoksa VEYA bağlanan kişi eski host ise hostluğu ona ver
+        if (!rooms[roomId].hostId || rooms[roomId].hostId === ws.userId) { 
+            rooms[roomId].hostId = ws.userId; 
+        }
        
-        ws.send(JSON.stringify({ type: 'joined', userId, isHost: rooms[roomId].hostId === userId, url: rooms[roomId].url, comments: rooms[roomId].comments, currentTime: rooms[roomId].currentTime || 0, lastAction: rooms[roomId].lastAction || null }));
-        broadcast(roomId, { type: 'user_joined', nickname, userCount: Object.keys(rooms[roomId].users).length }, userId);
+        ws.send(JSON.stringify({ 
+            type: 'joined', 
+            userId: ws.userId, 
+            isHost: rooms[roomId].hostId === ws.userId, 
+            url: rooms[roomId].url, 
+            comments: rooms[roomId].comments, 
+            currentTime: rooms[roomId].currentTime || 0, 
+            lastAction: rooms[roomId].lastAction || null 
+        }));
+        
+        broadcast(roomId, { type: 'user_joined', nickname: ws.nickname, userCount: Object.keys(rooms[roomId].users).length }, ws.userId);
         break;
       }
       case 'set_url': {
-        if (!currentRoom || rooms[currentRoom].hostId !== userId) return;
-        rooms[currentRoom].url = msg.url; rooms[currentRoom].currentTime = 0; rooms[currentRoom].lastAction = null;
-        broadcast(currentRoom, { type: 'url_changed', url: msg.url });
+        if (!ws.roomId || rooms[ws.roomId].hostId !== ws.userId) return;
+        rooms[ws.roomId].url = msg.url; 
+        rooms[ws.roomId].currentTime = 0; 
+        rooms[ws.roomId].lastAction = null;
+        broadcast(ws.roomId, { type: 'url_changed', url: msg.url });
         break;
       }
       case 'comment': {
-        if (!currentRoom || !msg.text.trim()) return;
-        const comment = { id: uuidv4().slice(0, 8), userId, nickname, text: msg.text.trim(), ts: Date.now() };
-        rooms[currentRoom].comments.push(comment);
-        if (rooms[currentRoom].comments.length > 200) rooms[currentRoom].comments.splice(0, 1);
-        broadcast(currentRoom, { type: 'new_comment', comment });
+        if (!ws.roomId || !msg.text.trim()) return;
+        const comment = { id: uuidv4().slice(0, 8), userId: ws.userId, nickname: ws.nickname, text: msg.text.trim(), ts: Date.now() };
+        rooms[ws.roomId].comments.push(comment);
+        if (rooms[ws.roomId].comments.length > 200) rooms[ws.roomId].comments.splice(0, 1);
+        broadcast(ws.roomId, { type: 'new_comment', comment });
         break;
       }
       case 'video_sync': {
-        if (!currentRoom || rooms[currentRoom].hostId !== userId) return;
-        const newTime = typeof msg.time === 'number' ? msg.time : rooms[currentRoom].currentTime;
-        if (msg.action === 'seek' && rooms[currentRoom].lastAction === 'seek' && Math.abs(newTime - rooms[currentRoom].currentTime) < 2) break;
-        rooms[currentRoom].currentTime = newTime; rooms[currentRoom].lastAction = msg.action;
-        broadcast(currentRoom, { type: 'video_sync', action: msg.action, time: newTime }, userId);
+        if (!ws.roomId || rooms[ws.roomId].hostId !== ws.userId) return;
+        const newTime = typeof msg.time === 'number' ? msg.time : rooms[ws.roomId].currentTime;
+        if (msg.action === 'seek' && rooms[ws.roomId].lastAction === 'seek' && Math.abs(newTime - rooms[ws.roomId].currentTime) < 2) break;
+        rooms[ws.roomId].currentTime = newTime; 
+        rooms[ws.roomId].lastAction = msg.action;
+        broadcast(ws.roomId, { type: 'video_sync', action: msg.action, time: newTime }, ws.userId);
         break;
       }
       case 'ping':
@@ -531,14 +549,27 @@ wss.on('connection', (ws) => {
   });
   
   ws.on('close', () => {
-    if (!currentRoom || !rooms[currentRoom]) return;
-    delete rooms[currentRoom].users[userId];
-    const remaining = Object.keys(rooms[currentRoom].users);
-    if (rooms[currentRoom].hostId === userId && remaining.length > 0) {
-      rooms[currentRoom].hostId = remaining[0];
-      rooms[currentRoom].users[rooms[currentRoom].hostId].ws.send(JSON.stringify({ type: 'you_are_host' }));
+    if (!ws.roomId || !rooms[ws.roomId]) return;
+    delete rooms[ws.roomId].users[ws.userId];
+    
+    const remaining = Object.keys(rooms[ws.roomId].users);
+    
+    // GÜNCELLENDİ: Host odadan düştüğünde anında başkasına devretme, 15 saniye bekle.
+    if (rooms[ws.roomId].hostId === ws.userId) {
+      setTimeout(() => {
+        // 15 saniye geçti ve odaya orijinal host geri dönmediyse devret:
+        if (rooms[ws.roomId] && rooms[ws.roomId].hostId === ws.userId && !rooms[ws.roomId].users[ws.userId]) {
+            const currentRemaining = Object.keys(rooms[ws.roomId].users);
+            if (currentRemaining.length > 0) {
+              rooms[ws.roomId].hostId = currentRemaining[0];
+              rooms[ws.roomId].users[rooms[ws.roomId].hostId].ws.send(JSON.stringify({ type: 'you_are_host' }));
+            } else {
+              rooms[ws.roomId].hostId = null; // Oda boşaldı
+            }
+        }
+      }, 15000); // Tolerans süresi (Milisaniye)
     }
-    broadcast(currentRoom, { type: 'user_left', nickname, userCount: remaining.length });
+    broadcast(ws.roomId, { type: 'user_left', nickname: ws.nickname, userCount: remaining.length });
   });
 });
 
@@ -550,15 +581,14 @@ function broadcast(roomId, msg, excludeUserId = null) {
   });
 }
 
-// YENİ: Her 30 saniyede bir zombi bağlantıları bulur ve zorla kapatır. 
-// Bu sayede RAM şişmez ve kullanıcı tarafı kopuşu hızlıca fark eder.
+// GÜNCELLENDİ: Tarayıcı arka plan uyku süreleri düşünülerek zombi kontrolü 45 saniyeye çıkarıldı.
 setInterval(() => {
   wss.clients.forEach((ws) => {
     if (ws.isAlive === false) return ws.terminate();
     ws.isAlive = false;
     ws.ping(); 
   });
-}, 30000);
+}, 45000);
 
 const PORT = process.env.PORT || 3000;
 server.listen(PORT, '0.0.0.0', () => console.log(`\n🎬 WatchParty çalışıyor → http://localhost:${PORT}\n`));
