@@ -155,12 +155,15 @@ app.get('/proxy', async (req, res) => {
     body = body.replace(/(href|src|action)=["']\/(?!\/)/gi, `$1="${origin}/`);
     body = body.replace(/<meta[^>]+http-equiv=["']Content-Security-Policy["'][^>]*>/gi, '');
 
+    // YENİ: Sitenin içindeki farklı kaynaklı (absolute) iframe'leri de proxy üzerinden geçmeye zorla.
+    // Bu sayede Vidmoly, ok.ru gibi 3. parti oynatıcılar da bizim sunucumuzdan geçer ve CORS aşılır.
+    body = body.replace(/<iframe([^>]+)src=["'](https?:\/\/[^"']+)["']/gi, (match, before, url) => {
+      // Eğer zaten proxy url'si ise dokunma
+      if (url.includes('/proxy?url=')) return match;
+      return `<iframe${before}src="/proxy?url=${encodeURIComponent(url)}"`;
+    });
+
     // ── Video senkronizasyon scripti ──────────────────────────────────────────
-    // FIX: Pause komutu artık güvenilir şekilde çalışıyor.
-    // - applyCmd hem doğrudan video elementlerine hem iç iframe'lere yazıyor.
-    // - MutationObserver yeni eklenen videolara da listener bağlıyor.
-    // - "pause" için play() promise'i iptal ediliyor (AbortController yok ama
-    //   muted trick sonrası pause çağrısı eklendi).
     const syncScript = `
 <style>
   html,body{margin:0!important;padding:0!important;width:100%!important;height:100%!important;overflow:auto!important}
@@ -168,34 +171,54 @@ app.get('/proxy', async (req, res) => {
 </style>
 <script>
 (function(){
-  var pendingPlay = null; // oynatma isteği takibi
+  // YENİ: Dinamik olarak Javascript ile eklenen iframe'leri yakala ve Proxy'e yönlendir.
+  // (hdfilmcehennemi gibi siteler için kritiktir)
+  try {
+    var originalSetAttribute = Element.prototype.setAttribute;
+    Element.prototype.setAttribute = function(name, value) {
+        if (this.tagName === 'IFRAME' && name.toLowerCase() === 'src' && typeof value === 'string' && value.startsWith('http')) {
+            if (!value.includes('/proxy?url=')) {
+                value = '/proxy?url=' + encodeURIComponent(value);
+            }
+        }
+        return originalSetAttribute.call(this, name, value);
+    };
+  } catch(e) {}
 
-  // Parent → iframe: komut al ve uygula
   window.addEventListener('message', function(e){
     var data = e.data;
-    if(!data) return;
     if(typeof data === 'string'){ try{ data = JSON.parse(data); }catch(err){ return; } }
-    if(!data.__watchparty) return;
-    applyCmd(data.action, data.time);
+    if(!data) return;
+
+    // YENİ: Alt iframe'den (çocuktan) bir video olayı geldiyse, bunu ÜST ebeveyne ilet (Bubble UP)
+    if(data.__watchparty_event){
+      if(window.parent && window.parent !== window){
+         window.parent.postMessage(JSON.stringify(data), '*');
+      }
+      return;
+    }
+
+    // Yukarıdan (parent) gelen komutu al ve uygula
+    if(data.__watchparty){
+      applyCmd(data.action, data.time);
+    }
   });
 
   function applyCmd(action, time){
     var videos = document.querySelectorAll('video');
     videos.forEach(function(v){
       try{
-        // Seek önce (oynatmadan önce konuma git)
         if(typeof time === 'number' && Math.abs(v.currentTime - time) > 1.5){
           v.currentTime = time;
         }
         if(action === 'play'){
           var p = v.play();
+          // Tarayıcı otomatik oynatmayı engellerse videoyu sessize alıp tekrar dene
           if(p && p.catch) p.catch(function(){
             v.muted = true;
             v.play().catch(function(){});
           });
         } else if(action === 'pause'){
-          // FIX: play promise resolve olmadan pause çağrısı DOMException fırlatır.
-          // Önce pause dene, hata alırsan 50ms sonra tekrar dene.
           try{ v.pause(); }catch(err){
             setTimeout(function(){ try{ v.pause(); }catch(_){} }, 50);
           }
@@ -203,21 +226,14 @@ app.get('/proxy', async (req, res) => {
       }catch(err){}
     });
 
-    // İç iframe'lere de ilet
+    // Komutu içteki diğer iframe'lere de pasla (Cascade DOWN)
     document.querySelectorAll('iframe').forEach(function(f){
       try{
-        var wpMsg = JSON.stringify({__watchparty:true, action:action, time:time});
-        f.contentWindow.postMessage(wpMsg, '*');
-        // YouTube API komutu
-        var ytFunc = action === 'play' ? 'playVideo' : 'pauseVideo';
-        f.contentWindow.postMessage(JSON.stringify({event:'command', func:ytFunc}), '*');
-        // Vimeo
-        f.contentWindow.postMessage(JSON.stringify({method: action === 'play' ? 'play' : 'pause'}), '*');
+        f.contentWindow.postMessage(JSON.stringify({__watchparty:true, action:action, time:time}), '*');
       }catch(err){}
     });
   }
 
-  // iframe → parent: video olaylarını bildir
   var lastSent = 0;
   function attachListeners(v){
     if(v.__wpAttached) return;
@@ -228,11 +244,13 @@ app.get('/proxy', async (req, res) => {
         if(now - lastSent < 300) return;
         lastSent = now;
         try{
-          window.parent.postMessage(JSON.stringify({
-            __watchparty_event: true,
-            action: evt === 'seeked' ? 'seek' : evt,
-            time:   v.currentTime
-          }), '*');
+          if(window.parent && window.parent !== window) {
+             window.parent.postMessage(JSON.stringify({
+              __watchparty_event: true,
+              action: evt === 'seeked' ? 'seek' : evt,
+              time:   v.currentTime
+            }), '*');
+          }
         }catch(err){}
       });
     });
@@ -246,6 +264,11 @@ app.get('/proxy', async (req, res) => {
           m.addedNodes.forEach(function(node){
             if(node.nodeName === 'VIDEO') attachListeners(node);
             if(node.querySelectorAll) node.querySelectorAll('video').forEach(attachListeners);
+            
+            // Eğer DOM'a yeni bir iframe eklenmişse ve proxy'den geçmiyorsa düzelt
+            if(node.nodeName === 'IFRAME' && node.src && node.src.startsWith('http') && !node.src.includes('/proxy?url=')) {
+               node.src = '/proxy?url=' + encodeURIComponent(node.src);
+            }
           });
         });
       }).observe(document.body || document.documentElement, {childList:true, subtree:true});

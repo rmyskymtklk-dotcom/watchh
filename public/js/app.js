@@ -419,7 +419,11 @@ window.triggerSyncLocal = function (action, time) {
   if (!target) return;
 
   // Yöntem 1: Proxy iframe köprü protokolü
-  // 'seek' → önce konuma git, sonra oynat (play gibi davran izleyicide)
+  // Önce süreyi güncelle, ardından asıl aksiyonu tetikle
+  if (typeof time === 'number') {
+     target.postMessage(JSON.stringify({ __watchparty: true, action: 'seek', time: time }), '*');
+  }
+  // 'seek' gönderilmiş olsa bile video devam ediyorsa/duruyorsa aksiyonu ayrıca gönder
   const proxyAction = action === 'seek' ? 'play' : action;
   target.postMessage(JSON.stringify({ __watchparty: true, action: proxyAction, time: time || 0 }), '*');
 
@@ -439,16 +443,23 @@ window.triggerSyncLocal = function (action, time) {
   }
   target.postMessage(JSON.stringify({ method: action === 'pause' ? 'pause' : 'play' }), '*');
 
-  // Yöntem 4: Same-origin direkt erişim
+  // Yöntem 4: Same-origin direkt erişim (Proxy ile artık tüm iframe'ler same-origin sayılacağı için bu method eskisinden daha iyi çalışacak)
   try {
     const doc = videoFrame.contentDocument || target.document;
-    doc.querySelectorAll('video').forEach(v => {
-      if (typeof time === 'number' && Math.abs(v.currentTime - time) > 1.5) v.currentTime = time;
-      if (action === 'pause') {
-        try { v.pause(); } catch (_) { setTimeout(() => { try { v.pause(); } catch (__) {} }, 50); }
-      } else {
-        v.play().catch(() => { v.muted = true; v.play(); });
-      }
-    });
+    // Derinlemesine video taraması
+    const findAndExecute = (win) => {
+        try {
+            win.document.querySelectorAll('video').forEach(v => {
+                if (typeof time === 'number' && Math.abs(v.currentTime - time) > 1.5) v.currentTime = time;
+                if (action === 'pause') {
+                    try { v.pause(); } catch (_) {}
+                } else {
+                    v.play().catch(() => { v.muted = true; v.play().catch(()=>{}); });
+                }
+            });
+            win.document.querySelectorAll('iframe').forEach(f => findAndExecute(f.contentWindow));
+        } catch (e) {}
+    };
+    findAndExecute(target);
   } catch (_) { /* CORS — beklenen */ }
 };
