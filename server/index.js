@@ -44,10 +44,77 @@ function resolveEmbedUrl(rawUrl) {
     return { type: 'proxy', url: rawUrl };
   }
 }
-app.get('/api/resolve', (req, res) => {
+// Bir sayfayı fetch edip içindeki video embed iframe src'sini çıkarır
+async function scrapeEmbedFromPage(pageUrl) {
+  try {
+    const headers = {
+      'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
+      'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+      'Accept-Language': 'tr-TR,tr;q=0.9,en-US;q=0.8',
+      'Referer': new URL(pageUrl).origin + '/',
+    };
+    const resp = await fetch(pageUrl, { headers, redirect: 'follow' });
+    const html = await resp.text();
+
+    // Yaygın video embed pattern'leri — sırayla dene
+    const patterns = [
+      // <iframe src="https://...">
+      /[<\s]iframe[^>]+src=["']([^"']*(?:embed|player|watch|video|filembed|vidsrc|rapidvid|doodstream|streamtape|fembed|sibnet|ok\.ru|mail\.ru|my\.mail|veoh|vidmoly|filelions|streamwish|vidhide|voe\.sx|streamhub|vidplay|mp4upload|upstream)[^"']*?)["']/i,
+      // data-src ile lazy-load iframe
+      /[<\s]iframe[^>]+data-src=["']([^"']*(?:embed|player|video)[^"']*?)["']/i,
+      // Herhangi bir dış kaynaklı iframe (son çare)
+      /[<\s]iframe[^>]+src=["'](https?:\/\/(?!(?:www\.)?(?:dizican|dizibox|hdfilmcehennemi|facebook|twitter|google|doubleclick|ads))[^"']+)["']/i,
+    ];
+
+    for (const pat of patterns) {
+      const m = html.match(pat);
+      if (m && m[1] && m[1].startsWith('http')) {
+        return m[1];
+      }
+    }
+    return null;
+  } catch(e) {
+    return null;
+  }
+}
+
+// Bilinen dizi/film sitelerinin sayfasından embed çıkarılabilir mi?
+function isScrapeableHost(host) {
+  const scrapeableHosts = [
+    'dizican.tv', 'dizibox.pro', 'dizibox.me', 'dizibox.biz',
+    'hdfilmcehennemi.nl', 'hdfilmcehennemi.com', 'hdfilmcehennemi.de',
+    'dizipal.com', 'dizipal.net', 'dizifon.com', 'fullhdfilm.pro',
+    'filmmakinesi.com', 'jetfilmizle.com', 'turkcealtyazi.org',
+  ];
+  return scrapeableHosts.some(h => host.includes(h));
+}
+
+app.get('/api/resolve', async (req, res) => {
   const raw = req.query.url;
   if (!raw) return res.status(400).json({ error: 'url gerekli' });
+
   const result = resolveEmbedUrl(raw);
+
+  // Bilinen dizi/film sitesiyse önce embed iframe'ini bulmaya çalış
+  if (result.type === 'proxy') {
+    try {
+      const u = new URL(raw.startsWith('http') ? raw : 'https://' + raw);
+      const host = u.hostname.replace('www.', '');
+      if (isScrapeableHost(host)) {
+        const embedUrl = await scrapeEmbedFromPage(raw.startsWith('http') ? raw : 'https://' + raw);
+        if (embedUrl) {
+          console.log('[resolve] Scraped embed:', embedUrl);
+          // Bulunan embed URL'sini de resolve et (örn. YouTube embed olabilir)
+          const embedResult = resolveEmbedUrl(embedUrl);
+          if (embedResult.type === 'embed') return res.json(embedResult);
+          // Değilse proxy üzerinden yükle
+          return res.json({ type: 'embed', url: '/proxy?url=' + encodeURIComponent(embedUrl) });
+        }
+        console.log('[resolve] Scrape failed for', raw, '— falling back to full proxy');
+      }
+    } catch(e) { /* ignore, fall through */ }
+  }
+
   if (result.type === 'proxy') result.proxyUrl = '/proxy?url=' + encodeURIComponent(result.url);
   res.json(result);
 });
