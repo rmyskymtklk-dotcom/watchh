@@ -124,6 +124,9 @@ app.all('/proxy', async (req, res) => {
 
     let body = await response.text();
     
+    body = body.replace(/ sandbox=["'][^"']*["']/gi, '');
+    body = body.replace(/ integrity=["'][^"']*["']/gi, '');
+
     const interceptorScript = `
     <base href="${targetOrigin}/">
     <meta name="referrer" content="no-referrer">
@@ -156,7 +159,7 @@ app.all('/proxy', async (req, res) => {
     body = body.replace('<head>', '<head>' + interceptorScript);
     body = body.replace(/<meta[^>]+http-equiv=["']Content-Security-Policy["'][^>]*>/gi, '');
     
-    body = body.replace(/(href|src)=["']([^"']+)["']/gi, (match, attr, url) => {
+    body = body.replace(/(href|src|data-src|data-href)=["']([^"']+)["']/gi, (match, attr, url) => {
       if (!url || url.startsWith('data:') || url.startsWith('blob:') || url.startsWith('javascript:') || url.startsWith('#') || url.includes('/proxy?url=')) return match;
       let fullUrl = url;
       if (url.startsWith('//')) fullUrl = 'https:' + url;
@@ -173,6 +176,31 @@ app.all('/proxy', async (req, res) => {
 <style>html,body{margin:0!important;padding:0!important;width:100%!important;height:100%!important;overflow:auto!important}iframe,video{max-width:100%!important}</style>
 <script>
 (function(){
+  try {
+    var origSetAttr = Element.prototype.setAttribute;
+    Element.prototype.setAttribute = function(name, value) {
+        if (this.tagName === 'IFRAME' || this.tagName === 'SCRIPT') {
+            if ((name.toLowerCase() === 'src' || name.toLowerCase() === 'data-src') && typeof value === 'string' && value.startsWith('http')) {
+                if (!value.includes('/proxy?url=')) value = '/proxy?url=' + encodeURIComponent(value);
+            }
+        }
+        return origSetAttr.call(this, name, value);
+    };
+    
+    var origIframeSrc = Object.getOwnPropertyDescriptor(HTMLIFrameElement.prototype, 'src');
+    if (origIframeSrc) {
+        Object.defineProperty(HTMLIFrameElement.prototype, 'src', {
+            get: function() { return origIframeSrc.get.call(this); },
+            set: function(val) {
+                if (typeof val === 'string' && val.startsWith('http') && !val.includes('/proxy?url=')) {
+                    val = '/proxy?url=' + encodeURIComponent(val);
+                }
+                return origIframeSrc.set.call(this, val);
+            }
+        });
+    }
+  } catch(e) {}
+
   var lastWpCmd = null;
   var isViewer = false;
 
@@ -226,8 +254,6 @@ app.all('/proxy', async (req, res) => {
   function applyCmdToVideo(v, action, time) {
       try{
         if(typeof time === 'number' && Math.abs(v.currentTime - time) > 1.5) v.currentTime = time;
-        
-        // YENİ: Mobilden tıklanarak sesi açma eylemi tetiklendiğinde burası çalışır
         if(action === 'unmute') {
             v.muted = false;
         } else if(action === 'play'){
@@ -246,7 +272,6 @@ app.all('/proxy', async (req, res) => {
     } else {
         triggerCustomPlayers(action);
     }
-    
     document.querySelectorAll('video').forEach(function(v){ applyCmdToVideo(v, action, time); });
     document.querySelectorAll('iframe').forEach(function(f){
       try{ f.contentWindow.postMessage(JSON.stringify({__watchparty:true, action:action, time:time}), '*'); }catch(err){}
@@ -283,7 +308,12 @@ app.all('/proxy', async (req, res) => {
             if(node.querySelectorAll) {
                 node.querySelectorAll('video').forEach(attachListeners);
                 node.querySelectorAll('iframe').forEach(function(f){
-                   if(f.src && f.src.startsWith('http') && !f.src.includes('/proxy?url=')) f.src = '/proxy?url=' + encodeURIComponent(f.src);
+                   var s = f.src || f.getAttribute('data-src');
+                   if(s && s.startsWith('http') && !s.includes('/proxy?url=')) {
+                       var px = '/proxy?url=' + encodeURIComponent(s);
+                       if (f.src) f.src = px;
+                       if (f.hasAttribute('data-src')) f.setAttribute('data-src', px);
+                   }
                 });
             }
           });
@@ -330,9 +360,11 @@ wss.on('connection', (ws) => {
       case 'join': {
         const { roomId, nick } = msg;
         if (!rooms[roomId]) return ws.send(JSON.stringify({ type: 'error', text: 'Oda bulunamadı' }));
-        currentRoom = roomId; nickname = nick || 'Misafir';
+        currentRoom = roomId; 
+        nickname = nick || 'Misafir';
         rooms[roomId].users[userId] = { ws, nickname };
         if (!rooms[roomId].hostId) rooms[roomId].hostId = userId;
+        
         ws.send(JSON.stringify({ type: 'joined', userId, isHost: rooms[roomId].hostId === userId, url: rooms[roomId].url, comments: rooms[roomId].comments, currentTime: rooms[roomId].currentTime || 0, lastAction: rooms[roomId].lastAction || null }));
         broadcast(roomId, { type: 'user_joined', nickname, userCount: Object.keys(rooms[roomId].users).length }, userId);
         break;
@@ -359,7 +391,9 @@ wss.on('connection', (ws) => {
         broadcast(currentRoom, { type: 'video_sync', action: msg.action, time: newTime }, userId);
         break;
       }
-      case 'ping': ws.send(JSON.stringify({ type: 'pong' })); break;
+      case 'ping': 
+        ws.send(JSON.stringify({ type: 'pong' })); 
+        break;
     }
   });
 
