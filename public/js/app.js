@@ -18,9 +18,75 @@
     setTimeout(() => el.remove(), 2700);
   }
 
+  // --- YENİ: TAM EKRAN (FULLSCREEN) ÇÖZÜMÜ ---
+  function setupFullscreen() {
+    const panel = document.querySelector('.video-panel');
+    if (!panel) return;
+
+    // Mobil/iOS fallback için dinamik CSS kuralı
+    if (!document.getElementById('wp-fs-style')) {
+        const style = document.createElement('style');
+        style.id = 'wp-fs-style';
+        style.innerHTML = `
+            .wp-css-fullscreen {
+                position: fixed !important; top: 0 !important; left: 0 !important;
+                width: 100vw !important; height: 100vh !important; height: 100dvh !important;
+                z-index: 99999 !important; background: #000 !important;
+            }
+        `;
+        document.head.appendChild(style);
+    }
+
+    // Özellik 1: Çift Tıklama ile Tam Ekran
+    panel.addEventListener('dblclick', () => toggleFS(panel));
+
+    // Özellik 2: Sağ Alta Özel Tam Ekran Butonu
+    let fsBtn = document.getElementById('wp-fs-btn');
+    if (!fsBtn) {
+        fsBtn = document.createElement('button');
+        fsBtn.id = 'wp-fs-btn';
+        // Tam ekran SVG ikonu
+        fsBtn.innerHTML = '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M8 3H5a2 2 0 0 0-2 2v3m18 0V5a2 2 0 0 0-2-2h-3m0 18h3a2 2 0 0 0 2-2v-3M3 16v3a2 2 0 0 0 2 2h3"></path></svg>';
+        fsBtn.style.cssText = 'position:absolute; bottom:12px; right:12px; z-index:1000; background:rgba(10,10,13,0.75); color:var(--text); border:1px solid rgba(255,255,255,0.08); border-radius:8px; width:40px; height:40px; cursor:pointer; display:flex; align-items:center; justify-content:center; backdrop-filter:blur(8px); transition:all 0.2s ease;';
+        
+        fsBtn.onmouseover = () => { fsBtn.style.color = '#0a0a0d'; fsBtn.style.background = 'var(--accent)'; };
+        fsBtn.onmouseout  = () => { fsBtn.style.color = 'var(--text)'; fsBtn.style.background = 'rgba(10,10,13,0.75)'; };
+        
+        fsBtn.onclick = (e) => { e.stopPropagation(); toggleFS(panel); };
+        panel.appendChild(fsBtn);
+    }
+  }
+
+  function toggleFS(panel) {
+    const isNativeFS = document.fullscreenElement || document.webkitFullscreenElement;
+    const isCssFS = panel.classList.contains('wp-css-fullscreen');
+
+    if (!isNativeFS && !isCssFS) {
+        // Tam ekrana gir
+        if (panel.requestFullscreen) {
+            panel.requestFullscreen().catch(() => panel.classList.add('wp-css-fullscreen'));
+        } else if (panel.webkitRequestFullscreen) {
+            panel.webkitRequestFullscreen();
+        } else {
+            panel.classList.add('wp-css-fullscreen'); // Native desteklenmeyen cihazlar (iOS) için Tiyatro Modu
+        }
+    } else {
+        // Tam ekrandan çık
+        if (isNativeFS) {
+            if (document.exitFullscreen) document.exitFullscreen();
+            else if (document.webkitExitFullscreen) document.webkitExitFullscreen();
+        }
+        if (isCssFS) panel.classList.remove('wp-css-fullscreen');
+    }
+  }
+  // ------------------------------------------
+
   window.addEventListener('DOMContentLoaded', () => {
     const r = new URLSearchParams(location.search).get('room');
     if (r) { roomCodeIn.value = r.toUpperCase(); toast('Oda kodu girildi, takma adını yaz ve Katıl!'); }
+    
+    // Uygulama yüklendiğinde tam ekran butonunu ve dinleyicilerini kur
+    setupFullscreen(); 
   });
 
   function formatTime(ts) {
@@ -206,7 +272,6 @@
   function syncVideoLocal(action, time) { 
     if (typeof window.triggerSyncLocal === 'function') window.triggerSyncLocal(action, time); 
     
-    // MOBİL DÜZELTME: Host oynattığında, İzleyicinin ekrana dokunarak sesi açabilmesi için buton oluştur.
     if (action === 'play' && !isHost) {
         let unmuteBtn = document.getElementById('wp-unmute-btn');
         if (!unmuteBtn) {
@@ -214,7 +279,8 @@
             unmuteBtn.id = 'wp-unmute-btn';
             unmuteBtn.innerHTML = '🔊 Sesi Aç (Tıkla)';
             unmuteBtn.style.cssText = 'position:absolute; top:20px; left:50%; transform:translateX(-50%); z-index:9999; padding:12px 24px; background:var(--accent); color:#0a0a0d; border:none; border-radius:24px; font-weight:800; font-family:var(--font-head); cursor:pointer; box-shadow:0 8px 32px rgba(0,0,0,0.6); font-size:0.9rem; animation:bubbleIn 0.3s ease;';
-            unmuteBtn.onclick = () => {
+            unmuteBtn.onclick = (e) => {
+                e.stopPropagation(); // dblclick ile çakışmayı önle
                 const vf = document.getElementById('videoFrame');
                 if(vf && vf.contentWindow) {
                     vf.contentWindow.postMessage(JSON.stringify({ __watchparty: true, action: 'unmute' }), '*');
