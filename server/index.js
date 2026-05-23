@@ -81,14 +81,14 @@ app.all('/proxy', async (req, res) => {
     if (req.headers['range']) fetchHeaders['Range'] = req.headers['range'];
 
     const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), 30000); // 30 sn zaman aşımı
+    const timer = setTimeout(() => controller.abort(), 30000);
 
     const response = await fetch(targetUrl, {
       method: req.method,
       signal: controller.signal,
       headers: fetchHeaders,
       body: ['GET', 'HEAD'].includes(req.method) ? undefined : req.body,
-      compress: false // KRİTİK DÜZELTME: Bu olmazsa MP4 video boyutları bozulur, ekran siyah kalır!
+      compress: false 
     });
     
     clearTimeout(timer);
@@ -105,7 +105,6 @@ app.all('/proxy', async (req, res) => {
     });
     res.status(response.status);
 
-    // YENİ: HLS (M3U8) Çalma listelerini ayrıştırıp içindeki video parçalarını (ts) proxy'e yönlendiriyoruz
     if (ct.includes('mpegurl') || ct.includes('x-mpegurl') || targetUrl.includes('.m3u8')) {
         let text = await response.text();
         let newLines = text.split('\n').map(line => {
@@ -119,14 +118,12 @@ app.all('/proxy', async (req, res) => {
         return res.send(newLines.join('\n'));
     }
 
-    // Video/Ses ise doğrudan yayınla (Stream)
     if (!ct.includes('text/html')) {
       return response.body.pipe(res);
     }
 
     let body = await response.text();
     
-    // JS Interceptor (Gelişmiş)
     const interceptorScript = `
     <base href="${targetOrigin}/">
     <meta name="referrer" content="no-referrer">
@@ -159,7 +156,6 @@ app.all('/proxy', async (req, res) => {
     body = body.replace('<head>', '<head>' + interceptorScript);
     body = body.replace(/<meta[^>]+http-equiv=["']Content-Security-Policy["'][^>]*>/gi, '');
     
-    // HTML içindeki href/src yollarını değiştir
     body = body.replace(/(href|src)=["']([^"']+)["']/gi, (match, attr, url) => {
       if (!url || url.startsWith('data:') || url.startsWith('blob:') || url.startsWith('javascript:') || url.startsWith('#') || url.includes('/proxy?url=')) return match;
       let fullUrl = url;
@@ -178,10 +174,34 @@ app.all('/proxy', async (req, res) => {
 <script>
 (function(){
   var lastWpCmd = null;
+  var isViewer = false;
+
   window.addEventListener('message', function(e){
     var data = e.data;
     if(typeof data === 'string'){ try{ data = JSON.parse(data); }catch(err){ return; } }
     if(!data) return;
+
+    // YENİ: Host/İzleyici Rol Algılayıcısı (Sadece videonun tıklanmasını kilitler, sayfa kaydırmayı serbest bırakır)
+    if(data.__watchparty_role){
+        isViewer = (data.__watchparty_role === 'viewer');
+        var styleId = 'wp-viewer-lock';
+        var existing = document.getElementById(styleId);
+        
+        if (isViewer && !existing) {
+            var s = document.createElement('style');
+            s.id = styleId;
+            s.innerHTML = 'video, iframe, .vjs-big-play-button, .jw-display-icon-display, .plyr__control--overlaid, .plyr { pointer-events: none !important; }';
+            document.head.appendChild(s);
+        } else if (!isViewer && existing) {
+            existing.remove();
+        }
+        
+        document.querySelectorAll('iframe').forEach(function(f){
+           try{ f.contentWindow.postMessage(JSON.stringify(data), '*'); }catch(err){}
+        });
+        return;
+    }
+
     if(data.__watchparty_event){
       if(window.parent && window.parent !== window) window.parent.postMessage(JSON.stringify(data), '*');
       return;

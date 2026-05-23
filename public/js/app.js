@@ -84,7 +84,6 @@
       case 'url_changed': loadVideo(msg.url).then(() => { if (!isHost) setHost(false); }); break;
       case 'video_sync':
         if (!isHost) {
-          // İZLEYİCİYE ANINDA BİLDİRİM VERİYORUZ
           let actionText = msg.action === 'play' ? '▶ Host videoyu oynatıyor...' : (msg.action === 'pause' ? '⏸ Host videoyu duraklattı' : '⏩ Host videoyu sardırdı');
           toast(actionText);
           syncVideoLocal(msg.action, msg.time);
@@ -104,13 +103,21 @@
     roleLabel.style.background = h ? 'var(--accent)' : 'var(--surface2)';
     roleLabel.style.color = h ? '#0a0a0d' : 'var(--muted)';
 
-    let lock = $('videoLock');
-    if (!lock) { lock = document.createElement('div'); lock.id = 'videoLock'; videoFrame.parentElement.appendChild(lock); }
-    if (h) {
-      lock.style.cssText = 'display:none';
-    } else {
-      lock.style.cssText = 'position:absolute;inset:0;z-index:999;background:transparent;cursor:not-allowed;pointer-events:all;';
-      let badge = $('viewerBadge');
+    // YENİ: Iframe'e izleyici/host rolünü bildir. Oynatıcı butonlarına tıklamayı proxy kapatacak.
+    try {
+      const target = document.getElementById('videoFrame');
+      if (target && target.contentWindow) {
+          target.contentWindow.postMessage(JSON.stringify({ __watchparty_role: h ? 'host' : 'viewer' }), '*');
+      }
+    } catch(e) {}
+
+    // YENİ: İzleyicinin sayfayı kaydırmasını (scroll) tamamen bozan görünmez kilidi SİLDİK!
+    let lock = document.getElementById('videoLock');
+    if (lock) lock.remove();
+
+    // Sadece ekranın altında küçük bilgi rozeti göster
+    let badge = $('viewerBadge');
+    if (!h) {
       if (!badge) {
         badge = document.createElement('div'); badge.id = 'viewerBadge';
         badge.style.cssText = 'position:absolute;bottom:12px;left:50%;transform:translateX(-50%);background:rgba(10,10,13,0.75);color:var(--muted);font-family:var(--font-head,sans-serif);font-size:0.72rem;padding:0.3rem 0.9rem;border-radius:20px;border:1px solid rgba(255,255,255,0.08);backdrop-filter:blur(8px);z-index:1000;pointer-events:none;white-space:nowrap;';
@@ -118,8 +125,9 @@
         videoFrame.parentElement.appendChild(badge);
       }
       badge.style.display = 'block';
+    } else {
+      if (badge) badge.style.display = 'none';
     }
-    const badge = $('viewerBadge'); if (badge && h) badge.style.display = 'none';
   }
 
   loadBtn.addEventListener('click', () => {
@@ -140,6 +148,14 @@
       showLoadingOverlay(false);
       openExt.href = url;
       videoFrame.src = data.type === 'embed' ? data.url : data.proxyUrl;
+      
+      // Iframe tamamen yüklendiğinde izleyici/host yetkisini güvenli bir şekilde tekrar içeri aktar
+      videoFrame.onload = () => {
+          try {
+              videoFrame.contentWindow.postMessage(JSON.stringify({ __watchparty_role: isHost ? 'host' : 'viewer' }), '*');
+          } catch(e) {}
+      };
+
     } catch (err) { showLoadingOverlay(false); frameWarn.classList.remove('hidden'); }
   }
 
@@ -211,12 +227,10 @@ window.triggerSyncLocal = function (action, time) {
   const proxyAction = action === 'seek' ? 'play' : action;
   const command = JSON.stringify({ __watchparty: true, action: proxyAction, time: time || 0 });
 
-  // GECİKMELİ ZORLA ÇALIŞTIRMA: Eğer iframe ağır yükleniyorsa diye komutu 3 kere (anında, 1sn ve 2sn sonra) fırlatıyoruz!
   target.postMessage(command, '*');
   setTimeout(() => target.postMessage(command, '*'), 1000);
   setTimeout(() => target.postMessage(command, '*'), 2500);
 
-  // YouTube ve Vimeo API komutları
   if (action === 'seek' || (typeof time === 'number' && time > 0)) {
     target.postMessage(JSON.stringify({ event: 'command', func: 'seekTo', args: [time || 0, true] }), '*');
     target.postMessage(JSON.stringify({ method: 'setCurrentTime', value: time }), '*');
