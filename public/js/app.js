@@ -90,9 +90,7 @@
           updateFsIcon(fsBtn, false);
         }
       });
-      document.addEventListener('fullscreenchange', () => {
-        updateFsIcon(fsBtn, !!document.fullscreenElement);
-      });
+      // Native fullscreen kullanılmıyor, listener gerekmiyor.
     };
 
     // #room henüz gizliyse görünür olana kadar bekle
@@ -118,30 +116,15 @@
 
   function toggleFS(panel) {
     const fsBtn = document.getElementById('wp-fs-btn');
-    const isNativeFS = !!(document.fullscreenElement || document.webkitFullscreenElement);
+    // Native fullscreen kullanmıyoruz — iframe içeriği tarayıcının
+    // kendi tam ekranını tetikleyip sitenin tamamını gösteriyor.
+    // Sadece CSS ile paneli fixed konuma alıyoruz.
     const isCssFS = panel.classList.contains('wp-css-fullscreen');
-
-    if (!isNativeFS && !isCssFS) {
-      if (panel.requestFullscreen) {
-        panel.requestFullscreen().then(() => {
-          updateFsIcon(fsBtn, true);
-        }).catch(() => {
-          panel.classList.add('wp-css-fullscreen');
-          updateFsIcon(fsBtn, true);
-        });
-      } else if (panel.webkitRequestFullscreen) {
-        panel.webkitRequestFullscreen();
-        updateFsIcon(fsBtn, true);
-      } else {
-        panel.classList.add('wp-css-fullscreen');
-        updateFsIcon(fsBtn, true);
-      }
+    if (!isCssFS) {
+      panel.classList.add('wp-css-fullscreen');
+      updateFsIcon(fsBtn, true);
     } else {
-      if (isNativeFS) {
-        if (document.exitFullscreen) document.exitFullscreen();
-        else if (document.webkitExitFullscreen) document.webkitExitFullscreen();
-      }
-      if (isCssFS) panel.classList.remove('wp-css-fullscreen');
+      panel.classList.remove('wp-css-fullscreen');
       updateFsIcon(fsBtn, false);
     }
   }
